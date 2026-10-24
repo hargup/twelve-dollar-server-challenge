@@ -149,31 +149,31 @@ limit.
 
 ## Local measurements (not the official score)
 
-The table below was measured on `lean-derive-hargup`, the main variant, with an instant
-disconnect at the end of the run. That teardown inflates peak memory for every server. Numbers
-for this variant, with a 30 s ramp-down as in `load.js`, will be added here.
-
-Both servers ran in the same harness on a shared machine (Xeon E-2176G, Ubuntu 24.04, kernel 6.8):
+The harness is the same as for `lean-derive-hargup`, on a shared machine (Xeon E-2176G, Ubuntu
+24.04, kernel 6.8):
 
 * **Server:** a systemd scope on one core with `MemoryMax=2G` and a 65,535 file-descriptor
   limit, on a fresh copy of the seed.
 * **Load:** a native generator replaying `bench/load.js` on the other cores, over loopback in a
   private network namespace.
-* **Run:** 300,000 users, 60 s ramp, 90–120 s hold.
-* **CPU per request:** the server cgroup's CPU time (user + system) divided by requests served.
+* **Run:** 300,000 users, 60 s ramp, 90 s hold, 30 s ramp-down as in `load.js`.
 
-| Server | Runs | CPU per request | Peak memory (cgroup) | Hold p95 / p99 | Errors |
+Memory is the server cgroup's: its peak, and its value mid-hold.
+
+| Server | Runs | CPU per request | Peak | Mid-hold total (process / kernel) | Errors |
 |---|---:|---|---|---|---:|
-| Rust io_uring, #82 (batch 2: 264,000 users) | 2 | 21.3, 19.3 µs | 676–713 MB | 6.4–7.0 / 22–24 ms | 0 |
-| this submission | 4 | 15.4, 15.7, 16.6, 17.1 µs | 858–965 MB | 6.9–10.8 / 21–25 ms | 0 |
+| this variant | 3 | 16.3, 17.4, 18.1 µs | 560–575 MB | 524–527 MB (28–29 / 461 MB) | 0 |
+| `lean-derive-hargup` | 1 | 16.5 µs | 653 MB | 603 MB (94 / 475 MB) | 0 |
+| Rust io_uring, #82 | 1 | 23.8 µs | 616 MB | 566 MB (67 / 464 MB) | 0 |
+
+The kernel's share is the open connections themselves, about the same for every server.
 
 Caveats:
-* **Loopback.** The client's CPU does part of the kernel's receive work that a real NIC would
-  put on the server.
+* **Loopback.** The client's CPU does part of the kernel's receive work.
 * **Faster core.** This core is much faster than the benchmark's 2.4 GHz VPS.
 * **Noise.** The machine is shared; repeated runs vary by about ±1 µs per request.
-* **Peak memory.** It includes database pages that the startup invariant scan brings into the
-  page cache; those pages are reclaimable.
+* **Checkpoint stalls.** On this machine's busy disk, WAL checkpoints (one every 4,000 pages,
+  run inside the event loop) occasionally stall responses for up to a second.
 * **Not a capacity search.** This is a same-harness comparison, not a search for the maximum
   number of users and not an official score.
 
