@@ -55,14 +55,17 @@ static KeyInfo *db_keyinfo(int nkey, int nextra) {
  * hook wakes the thread once the log passes CKPT_FRAMES. */
 #include <pthread.h>
 #define CKPT_FRAMES 1000
+#define WAL_HIGH 16384      /* see db_wal_bound */
 
 static sqlite3 *ckpt_db;
 static pthread_mutex_t ckpt_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ckpt_cv = PTHREAD_COND_INITIALIZER;
 static int ckpt_wanted;
+static int wal_frames;      /* frames in the log after the last commit */
 
 static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
   (void)arg; (void)d; (void)name;
+  wal_frames = frames;
   if (frames >= CKPT_FRAMES && !__atomic_load_n(&ckpt_wanted, __ATOMIC_RELAXED)) {
     pthread_mutex_lock(&ckpt_mu);
     ckpt_wanted = 1;
@@ -132,10 +135,25 @@ static void db_batch_begin(void) {
   db_in_batch = 1;
   db_wrote = 0;
 }
+/* The log starts over only when a write begins after every frame has been checkpointed. With
+ * commits arriving continuously, the background checkpoints can keep missing that moment and
+ * the log keeps growing. Past WAL_HIGH frames, while the background thread is idle, this
+ * thread checkpoints the remainder itself between batches (it cannot be inside a transaction
+ * here), so the next write restarts the log. That stalls the loop for one fsync, only in this
+ * case. */
+static void db_wal_bound(void) {
+  if (wal_frames < WAL_HIGH || __atomic_load_n(&ckpt_wanted, __ATOMIC_ACQUIRE)) return;
+  int nlog = 0, ndone = 0;
+  int rc = sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_PASSIVE, &nlog, &ndone);
+  if (rc == SQLITE_OK) wal_frames = 0;
+  static i64 last;
+  if (time(0) != last) { last = time(0); fprintf(stderr, "wal: %d frames, checkpointed in the request thread (%s)\n", nlog, rc == SQLITE_OK ? "ok" : sqlite3_errmsg(db)); }
+}
+
 /* Returns 0 if the batch committed. */
 static int db_batch_end(void) {
   db_in_batch = 0;
-  if (step_reset(st_commit) == SQLITE_DONE) return 0;
+  if (step_reset(st_commit) == SQLITE_DONE) { db_wal_bound(); return 0; }
   step_reset(st_rollback);
   return -1;
 }

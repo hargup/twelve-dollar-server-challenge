@@ -129,6 +129,9 @@ results): feed 16.7 µs with the reference SQL → 5.4 µs.
     its own connection.
   * A commit's durability does not depend on checkpoints (WAL, `synchronous=NORMAL`). Every
     response still waits for its commit.
+  * The log starts over only when a write begins after every frame has been checkpointed. If
+    it still grows past 64 MB, the request thread checkpoints the remainder between batches.
+    That is one fsync stall, so it is a last resort; in the measured runs it never ran.
 * **JWT.** HS256 is verified on every request (signature, `alg`, `exp` required and in the
   future). The HMAC key pads are computed once from `JWT_SECRET`; that is the key schedule,
   not a verification result.
@@ -186,7 +189,7 @@ Memory is the server cgroup's: its peak, and its value mid-hold.
 
 | Server | Runs | CPU per request | Peak | Mid-hold total (process / kernel) | Errors |
 |---|---:|---|---|---|---:|
-| this variant | 2 | 17.2, 17.8 µs | 537–541 MB | 520–522 MB (22–28 / 461 MB) | 0 |
+| this variant | 3 | 17.0, 17.2, 17.8 µs | 533–541 MB | 517–522 MB (22–28 / 461 MB) | 0 |
 | this variant, checkpoints in the event loop | 3 | 16.3, 17.4, 18.1 µs | 560–575 MB | 524–527 MB (28–29 / 461 MB) | 0 |
 | `lean-derive-hargup` | 1 | 16.5 µs | 653 MB | 603 MB (94 / 475 MB) | 0 |
 | Rust io_uring, #82 | 1 | 23.8 µs | 616 MB | 566 MB (67 / 464 MB) | 0 |
@@ -199,8 +202,8 @@ Caveats:
 * **Noise.** The machine is shared; repeated runs vary by about ±1 µs per request.
 * **Checkpoint stalls.** On this machine's busy disk, checkpoints inside the event loop (one
   every 4,000 pages) occasionally stalled responses. The worst 10-second window reached a p99
-  of 1,045 ms. With the checkpoint thread, the worst 10-second p99 over two runs was 76 and
-  151 ms, and the WAL stayed under 15 MB.
+  of 1,045 ms. With the checkpoint thread, the worst 10-second p99 over three runs was 26, 76
+  and 151 ms, and the WAL stayed under 15 MB.
 * **Not a capacity search.** This is a same-harness comparison, not a search for the maximum
   number of users and not an official score.
 
