@@ -8,10 +8,17 @@ same proofs, tuned to keep less memory resident:
   connections need 5 rings instead of 10, so there are fewer ring buffers and fewer
   `io_uring_enter` calls per loop.
 * **Receive buffers.** 512 per ring instead of 1,024.
+* **Partial requests.** A connection's input buffer is released once its buffered requests
+  have been parsed, rather than retained for the rest of an idle keep-alive connection.
 * **Response buffers.** Two size classes, 1 KiB and 8 KiB. The generator picks the class from
   each response's JSON shape (a list of rows starts big). Free lists are capped, so bursts do
   not stay resident.
+* **Cursor storage.** Three reusable cursor objects replace allocations on every batch. Each
+  batch still opens fresh SQLite cursors and closes them before committing.
 * **SQLite page cache.** 1 MiB instead of 4 MiB; reads come from the mmap.
+* **Checkpoints off the request path.** WAL checkpoints (copying the log into the database and
+  fsyncing it) run on their own thread and SQLite connection, so a slow disk can no longer stall
+  responses. See SQLite below.
 
 The kernel's memory per open connection is the same for both variants, and so is most of the
 total: on the server side, about 2.4 KB for the TCP socket, 1.3 KB for its inode, file and dentry,
@@ -32,8 +39,8 @@ serialization and even query execution are specialized to it.
 |---|---|
 | Language | Lean 4.35.0 (specification, proofs, generator) → C (gcc, `-O2 -march=native`) |
 | Framework | none: the application layer is generated |
-| Database | SQLite 3.54.1 amalgamation, compiled into the binary (`THREADSAFE=0`) |
-| Transport | io_uring (Linux ≥ 6.1), one thread, HTTP/1.1 keep-alive |
+| Database | SQLite 3.54.1 amalgamation, compiled into the binary (`THREADSAFE=2`) |
+| Transport | io_uring (Linux ≥ 6.1), one request thread plus a checkpoint thread, HTTP/1.1 keep-alive |
 | **Nginx** | **no: serves the internet directly** on `HOST:PORT` (`0.0.0.0:80`) |
 | Dependencies | Lean toolchain and SQLite, pinned by version and SHA-256; nothing else |
 
@@ -80,10 +87,14 @@ Proved in Lean (kernel-checked on every build; no `sorry`, only the standard axi
 | `Db.inv_like` | likes preserve `Inv` |
 
 At startup the server runs `checkInv` once, a single pass over posts. After every insert it
-runs `insertOk` on the new row. Exclusive locking makes it the only writer, so these checks
-cover every write. If the stored layout differs from `Schema.lean`, or a check ever fails
-(say the clock steps back), the feed falls back to the specification's SQL
-(`ORDER BY created_at DESC, id DESC LIMIT 20`) for good. The plans are proved against the
+runs `insertOk` on the new row. These checks cover every write as long as this process is the
+only writer. That is verified at the start of every batch: SQLite's data version changes only
+when another connection commits.
+
+The server switches to the specification's SQL for good when:
+* the stored layout differs from `Schema.lean`;
+* the invariant check ever fails (say the clock steps back): the feed switches;
+* another connection writes: every read switches. The plans are proved against the
 model; the C emitted for them is tested, not proved (see Tests).
 
 ### Native read plans on SQLite's B-tree layer
@@ -98,8 +109,8 @@ results): feed 16.7 µs with the reference SQL → 5.4 µs.
 
 ## The rest of the server
 
-* **Transport.** Several io_uring instances, each with a `SO_REUSEPORT` listener and a table
-  of direct descriptors:
+* **Transport.** io_uring instances open on demand, sharing one listener; each has its own
+  table of direct descriptors:
   * multishot accept/receive, provided receive buffers, `DEFER_TASKRUN`;
   * direct descriptors do not use the process file table, so under `LimitNOFILE=65535` the
     server holds up to 10 × 65,471 connections;
@@ -111,7 +122,13 @@ results): feed 16.7 µs with the reference SQL → 5.4 µs.
     see uncommitted rows;
   * after a light round the loop sleeps 250 µs so that the next round is a batch rather than a
     single request.
-* **SQLite.** WAL, `synchronous=NORMAL`, `locking_mode=EXCLUSIVE`, 1 GiB mmap, small page cache.
+* **SQLite.** WAL, `synchronous=NORMAL`, 1 GiB mmap, small page cache. Built multi-threaded
+  (`SQLITE_THREADSAFE=2`); each connection is used by one thread.
+  * Requests run on the main connection, whose automatic checkpoints are off. When the log
+    passes 1,000 frames, a WAL hook wakes a second thread, which runs `PASSIVE` checkpoints on
+    its own connection.
+  * A commit's durability does not depend on checkpoints (WAL, `synchronous=NORMAL`). Every
+    response still waits for its commit.
 * **JWT.** HS256 is verified on every request (signature, `alg`, `exp` required and in the
   future). The HMAC key pads are computed once from `JWT_SECRET`; that is the key schedule,
   not a verification result.
@@ -126,8 +143,9 @@ indexes or triggers are added.
 4. `test/test.sh`: 42/42 (CI flow, run in a clean Ubuntu 24.04 container).
 
 5. No caching across requests. Every response is built from SQLite pages read while the request is
-being served. The only state kept between batches is whether the invariant still holds, which
-records a property of the data, not data.
+being served. The only state kept between batches is two facts about the data, not data: whether the
+invariant still holds, and whether another connection has written (SQLite's data version
+number).
 
 6. WAL + `synchronous=NORMAL`; group commit; each response waits for its commit.
 
@@ -143,9 +161,15 @@ limit.
 ## Tests
 
 * `test/test.sh` (42 checks) through `test/run.sh`, exactly as CI runs it.
+* `python3 tests/edge_cases.py` against a running server: fragmented and pipelined writes and
+  reads, long strings, JSON escaping, and UTF-8. Reads `HOST`, `PORT`, and `JWT_SECRET`; it
+  creates test posts, so use a disposable database copy.
 * Native plans vs SQL: the feed and 20,000 random posts are byte-identical on the seed.
 * Load: a native load generator reproducing `bench/load.js` (user model, think times, mix,
   `ramping-vus`, one keep-alive connection per user). It is not part of this submission.
+
+See [optimization trials](tests/optimization-results.md) for the individual memory, cursor,
+batching, and compiler experiments and their limitations.
 
 ## Local measurements (not the official score)
 
@@ -162,7 +186,8 @@ Memory is the server cgroup's: its peak, and its value mid-hold.
 
 | Server | Runs | CPU per request | Peak | Mid-hold total (process / kernel) | Errors |
 |---|---:|---|---|---|---:|
-| this variant | 3 | 16.3, 17.4, 18.1 µs | 560–575 MB | 524–527 MB (28–29 / 461 MB) | 0 |
+| this variant | 2 | 17.2, 17.8 µs | 537–541 MB | 520–522 MB (22–28 / 461 MB) | 0 |
+| this variant, checkpoints in the event loop | 3 | 16.3, 17.4, 18.1 µs | 560–575 MB | 524–527 MB (28–29 / 461 MB) | 0 |
 | `lean-derive-hargup` | 1 | 16.5 µs | 653 MB | 603 MB (94 / 475 MB) | 0 |
 | Rust io_uring, #82 | 1 | 23.8 µs | 616 MB | 566 MB (67 / 464 MB) | 0 |
 
@@ -172,8 +197,10 @@ Caveats:
 * **Loopback.** The client's CPU does part of the kernel's receive work.
 * **Faster core.** This core is much faster than the benchmark's 2.4 GHz VPS.
 * **Noise.** The machine is shared; repeated runs vary by about ±1 µs per request.
-* **Checkpoint stalls.** On this machine's busy disk, WAL checkpoints (one every 4,000 pages,
-  run inside the event loop) occasionally stall responses for up to a second.
+* **Checkpoint stalls.** On this machine's busy disk, checkpoints inside the event loop (one
+  every 4,000 pages) occasionally stalled responses. The worst 10-second window reached a p99
+  of 1,045 ms. With the checkpoint thread, the worst 10-second p99 over two runs was 76 and
+  151 ms, and the WAL stayed under 15 MB.
 * **Not a capacity search.** This is a same-harness comparison, not a search for the maximum
   number of users and not an official score.
 

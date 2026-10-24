@@ -219,7 +219,13 @@ static u32 parse_requests(ring *r, u32 slot, const u8 *p, u32 n) {
   return used;
 }
 static void conn_keep(conn *c, const u8 *p, u32 n) {
-  if (!n) { c->in_len = 0; return; }
+  if (!n) {
+    /* A completed fragmented request must not leave a buffer on an idle connection. */
+    free(c->in);
+    c->in = 0;
+    c->in_len = c->in_cap = 0;
+    return;
+  }
   if (c->in == p) { c->in_len = n; return; }
   if (n > c->in_cap) {
     u32 cap = n < 4096 ? 4096 : n * 2;
