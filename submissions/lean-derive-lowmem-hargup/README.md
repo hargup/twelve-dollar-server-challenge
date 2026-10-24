@@ -1,4 +1,21 @@
-# Lean → C: a derived feed server
+# Lean → C: a derived feed server (lower-memory variant)
+
+This is the same server as `lean-derive-hargup`, from the same Lean specification and with the
+same proofs, tuned to keep less memory resident:
+
+* **Rings on demand.** io_uring rings are opened on demand behind one shared listener: one ring
+  accepts at a time and hands over before its table of direct descriptors fills. 300k
+  connections need 5 rings instead of 10, so there are fewer ring buffers and fewer
+  `io_uring_enter` calls per loop.
+* **Receive buffers.** 512 per ring instead of 1,024.
+* **Response buffers.** Two size classes, 1 KiB and 8 KiB. The generator picks the class from
+  each response's JSON shape (a list of rows starts big). Free lists are capped, so bursts do
+  not stay resident.
+* **SQLite page cache.** 1 MiB instead of 4 MiB; reads come from the mmap.
+
+The kernel's memory per open connection is the same for both variants, and so is most of the
+total: on the server side, about 2.4 KB for the TCP socket, 1.3 KB for its inode, file and dentry,
+and 0.35 KB for the armed receive.
 
 The API is specified in **Lean 4**: the domain, a global invariant over the stored data, the
 read plans (with proofs that they compute the specified results), and the wire contract.
@@ -131,6 +148,10 @@ limit.
   `ramping-vus`, one keep-alive connection per user). It is not part of this submission.
 
 ## Local measurements (not the official score)
+
+The table below was measured on `lean-derive-hargup`, the main variant, with an instant
+disconnect at the end of the run. That teardown inflates peak memory for every server. Numbers
+for this variant, with a 30 s ramp-down as in `load.js`, will be added here.
 
 Both servers ran in the same harness on a shared machine (Xeon E-2176G, Ubuntu 24.04, kernel 6.8):
 

@@ -5,16 +5,18 @@
 #endif
 
 /* Send buffers. A response body is written after HDR_ROOM reserved bytes; out_finish() writes
- * the status line and headers right in front of it. obuf headers and 8 KiB blocks are kept on
- * free lists; larger bodies get their own allocation. Static (generated) responses are sent
- * from read-only memory without copying. */
+ * the status line and headers right in front of it. Bodies start in a block of one of two
+ * sizes (the generated code picks the class per endpoint); a block that runs out moves to its
+ * own allocation. Freed blocks are kept on capped free lists, so a burst of responses does not
+ * stay resident. Static (generated) responses are sent from read-only memory without copying. */
 
-#define BLOCK 8192
-enum { OB_STATIC = 0, OB_BLOCK = 1, OB_HEAP = 2 };
+#define OUT_SMALL 1024
+#define OUT_BIG 8192
 
 static obuf *obuf_free_list;
-static u8 *block_free_list;
-static u32 block_free_count;
+typedef struct { u8 *head; u32 count, cap; } block_pool;
+static block_pool pool_small = {0, 0, 2048}, pool_big = {0, 0, 256};
+static inline block_pool *pool_of(u32 size) { return size == OUT_SMALL ? &pool_small : size == OUT_BIG ? &pool_big : 0; }
 
 static inline obuf *obuf_get(void) {
   obuf *b = obuf_free_list;
@@ -23,17 +25,20 @@ static inline obuf *obuf_get(void) {
   b->next = 0;
   return b;
 }
-static inline u8 *block_get(void) {
-  u8 *m = block_free_list;
-  if (m) { block_free_list = *(u8 **)m; block_free_count--; return m; }
-  if (!(m = malloc(BLOCK))) abort();
+static inline u8 *block_get(u32 size) {
+  block_pool *p = pool_of(size);
+  u8 *m = p->head;
+  if (m) { p->head = *(u8 **)m; p->count--; return m; }
+  if (!(m = malloc(size))) abort();
   return m;
 }
-static inline void block_put(u8 *m) {
-  if (block_free_count >= 16384) { free(m); return; }
-  *(u8 **)m = block_free_list;
-  block_free_list = m;
-  block_free_count++;
+/* Return a body allocation of `size` bytes. */
+static inline void block_put(u8 *m, u32 size) {
+  block_pool *p = pool_of(size);
+  if (!p || p->count >= p->cap) { free(m); return; }
+  *(u8 **)m = p->head;
+  p->head = m;
+  p->count++;
 }
 static obuf *obuf_static(const u8 *data, u32 len) {
   obuf *b = obuf_get();
@@ -41,18 +46,17 @@ static obuf *obuf_static(const u8 *data, u32 len) {
   return b;
 }
 static void obuf_release(obuf *b) {
-  if (b->cap == BLOCK) block_put(b->mem);
-  else if (b->cap) free(b->mem);
+  if (b->cap) block_put(b->mem, b->cap);
   b->next = obuf_free_list;
   obuf_free_list = b;
 }
 
-static inline void out_begin(out_t *o) {
+static inline void out_begin(out_t *o, u32 size) {
   obuf *b = o->b = obuf_get();
-  b->mem = block_get();
-  b->cap = BLOCK;
+  b->mem = block_get(size);
+  b->cap = size;
   o->start = o->p = b->mem + HDR_ROOM;
-  o->end = b->mem + BLOCK;
+  o->end = b->mem + size;
 }
 /* Make room for n more body bytes. */
 static void out_grow(out_t *o, u32 n) {
@@ -62,7 +66,7 @@ static void out_grow(out_t *o, u32 n) {
   u8 *m = malloc(HDR_ROOM + want);
   if (!m) abort();
   memcpy(m + HDR_ROOM, o->start, used);
-  if (o->b->cap == BLOCK) block_put(o->b->mem); else free(o->b->mem);
+  block_put(o->b->mem, o->b->cap);
   o->b->mem = m;
   o->b->cap = HDR_ROOM + want;
   o->start = m + HDR_ROOM;

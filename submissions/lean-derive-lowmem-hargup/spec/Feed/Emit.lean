@@ -190,6 +190,13 @@ def postArgs : String := "i64 id, const u8 *body, u32 body_len, const u8 *create
 def emitPutPost : String :=
   s!"/* Feed.Contract.postShape */\nstatic inline void put_post(out_t *o, {postArgs}) \{\n  {emitWhole postShape}\n}\n"
 
+/-- Initial send-buffer class: a shape that embeds rows (a list) starts in a big block, a single
+object in a small one. Either grows if the data needs it. -/
+partial def hasRows : Shape → Bool
+  | .obj fs => fs.any fun (k, v) => (k == "posts" && v matches .embed _) || hasRows v
+  | _ => false
+def bufferClass (s : Shape) : String := if hasRows s then "OUT_BIG" else "OUT_SMALL"
+
 def templateMain : String := include_str "templates/app.c"
 
 def appGen : String :=
@@ -214,6 +221,8 @@ def appGen : String :=
     ("CREATE_BEFORE", postBefore),
     ("CREATE_AFTER", postAfter),
     ("FEED_SIZE", toString feedSize),
+    ("FEED_CLASS", bufferClass feedShape),
+    ("OBJECT_CLASS", bufferClass postShape),
     ("WINDOW_SPAN", toString (feedSize - 1)),
     ("MAX_BODY_CHARS", toString maxBodyChars),
     ("POSTS_NCOLS", toString (recordNeeds posts)),

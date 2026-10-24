@@ -262,21 +262,23 @@ static int post_by_id(out_t *o, i64 id) {
 
 static void exec_read(job_t *j) {
   out_t o0, *o = &o0;
-  out_begin(o);
   int rc;
   switch (j->kind) {
   case K_FEED:
+    out_begin(o, @{FEED_CLASS});
     rc = inv_ok ? feed_tail(o) : -1;
-    if (rc) { out_abort(o); out_begin(o); rc = feed_sql(o); }
+    if (rc) { out_abort(o); out_begin(o, @{FEED_CLASS}); rc = feed_sql(o); }
     if (rc) { out_abort(o); j->resp = ERR(@{ERR_INTERNAL}); return; }
     j->resp = out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1);
     return;
   case K_POST:
+    out_begin(o, @{OBJECT_CLASS});
     rc = post_by_id(o, j->id);
     if (rc) { out_abort(o); j->resp = rc > 0 ? ERR(@{ERR_NO_POST}) : ERR(@{ERR_INTERNAL}); return; }
     j->resp = out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1);
     return;
   case K_HEALTH:
+    out_begin(o, @{OBJECT_CLASS});
     rc = sqlite3_step(Q_health);
     sqlite3_reset(Q_health);
     if (rc == SQLITE_ROW) {
@@ -309,7 +311,7 @@ static void exec_write(job_t *j) {
     if (rc != SQLITE_DONE) { j->resp = ERR(@{ERR_INTERNAL}); return; }
     int already = sqlite3_changes(db) != 1;
     i64 id = j->id;
-    out_begin(o);
+    out_begin(o, @{OBJECT_CLASS});
     @{LIKE_BODY}
     j->resp = already ? out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1) : out_finish(o, @{HDR_CREATED}, sizeof @{HDR_CREATED} - 1);
     return;
@@ -337,7 +339,7 @@ static void exec_write(job_t *j) {
       inv_ok = 0;
       fprintf(stderr, "Feed.Db.Inv no longer holds after post %lld; feed uses SQL\n", (long long)id);
     }
-    out_begin(o);
+    out_begin(o, @{OBJECT_CLASS});
     @{CREATE_BEFORE}
     put_post(o, id, j->text, j->text_len, created, created_len, j->name, j->name_len, 0);
     @{CREATE_AFTER}

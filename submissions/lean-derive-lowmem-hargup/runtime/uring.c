@@ -1,10 +1,11 @@
 #include "rt.h"
-/* io_uring transport. One thread drives several rings. Each ring owns a SO_REUSEPORT listener,
- * a table of direct (fixed) socket descriptors and a provided-buffer ring. Direct descriptors
- * do not occupy the process file table, so the number of connections is bounded by
- * rings x per-ring table size rather than by RLIMIT_NOFILE. Rings are created with
- * DEFER_TASKRUN: completions are produced only when this thread asks, so each loop iteration
- * collects a batch of requests that is then served by one SQLite transaction. */
+/* io_uring transport. One thread drives several rings. Each ring owns a table of direct
+ * (fixed) socket descriptors and a provided-buffer ring. Direct descriptors do not occupy the
+ * process file table, so the number of connections is bounded by rings x per-ring table size
+ * rather than by RLIMIT_NOFILE. Rings are opened on demand: one listener is shared, exactly one
+ * ring accepts at a time, and accepting moves on before that ring's table fills. Rings are
+ * created with DEFER_TASKRUN: completions are produced only when this thread asks, so each
+ * loop iteration collects a batch of requests that is then served by one SQLite transaction. */
 
 #include <errno.h>
 #include <stdio.h>
@@ -25,9 +26,10 @@
 #define MAX_RINGS 16
 #define SQ_ENTRIES 4096
 #define CQ_ENTRIES 32768
-#define NBUF 1024           /* provided receive buffers per ring */
+#define NBUF 512            /* provided receive buffers per ring */
 #define BUFSZ 2048
 #define CQE_BUDGET 2048     /* completions handled per ring per iteration */
+#define ACCEPT_SPARE 2048   /* stop accepting into a ring this many slots before it is full */
 
 enum { OP_ACCEPT = 1, OP_RECV, OP_SEND, OP_CLOSE, OP_SHUTDOWN };
 enum { C_FREE = 0, C_OPEN, C_CLOSING };
@@ -41,7 +43,7 @@ typedef struct conn {
 } conn;
 
 typedef struct ring {
-  int fd, efd, lfd, idx;
+  int fd, efd, idx;
   u32 *sq_khead, *sq_ktail, *sq_kflags, *sq_array, sq_mask, sq_entries, sq_tail, to_submit;
   struct io_uring_sqe *sqes;
   u32 *cq_khead, *cq_ktail, cq_mask;
@@ -49,7 +51,7 @@ typedef struct ring {
   struct io_uring_buf_ring *br;
   u16 br_tail;
   u8 *bufs;
-  u32 nslots;
+  u32 nslots, nopen;      /* table size; slots in use (open or closing) */
   conn *conns;
   u8 hot;
   u8 accept_armed;
@@ -57,6 +59,8 @@ typedef struct ring {
 
 static ring rings[MAX_RINGS];
 static int nrings;
+static int listen_fd, acc_ring;    /* the shared listener; the ring that accepts */
+static u32 ring_slots;
 static int epfd;
 static i64 now_s;           /* wall clock seconds, refreshed every iteration */
 
@@ -92,7 +96,7 @@ static struct io_uring_sqe *sqe_get(ring *r) {
 static void arm_accept(ring *r) {
   struct io_uring_sqe *s = sqe_get(r);
   s->opcode = IORING_OP_ACCEPT;
-  s->fd = r->lfd;
+  s->fd = listen_fd;
   s->ioprio = IORING_ACCEPT_MULTISHOT;
   s->file_index = IORING_FILE_INDEX_ALLOC;
   s->user_data = ud(OP_ACCEPT, (u8)r->idx, 0, 0);
@@ -261,6 +265,7 @@ static void handle_cqe(ring *r, struct io_uring_cqe *e) {
     if (res >= 0) {
       conn *c = &r->conns[res];
       if (c->state != C_FREE) conn_reset(c);
+      else r->nopen++;
       c->gen++;
       c->state = C_OPEN;
       arm_recv(r, (u32)res);
@@ -310,7 +315,7 @@ static void handle_cqe(ring *r, struct io_uring_cqe *e) {
   }
   case OP_CLOSE: {
     conn *c = &r->conns[slot];
-    if (c->gen == gen && c->state == C_CLOSING) { conn_reset(c); c->state = C_FREE; }
+    if (c->gen == gen && c->state == C_CLOSING) { conn_reset(c); c->state = C_FREE; r->nopen--; }
     if (res < 0) fprintf(stderr, "close: %s\n", strerror(-res));
     return;
   }
@@ -347,7 +352,6 @@ static int listen_socket(const char *host, int port) {
   int fd = socket(fam, SOCK_STREAM | SOCK_CLOEXEC, 0);
   int one = 1;
   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-  setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);
   setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
   if (bind(fd, (struct sockaddr *)&ss, sl) < 0) { perror("bind"); exit(1); }
   if (listen(fd, 65535) < 0) { perror("listen"); exit(1); }
@@ -355,6 +359,7 @@ static int listen_socket(const char *host, int port) {
 }
 
 static void ring_init(ring *r, int idx, u32 slots, const char *host, int port) {
+  (void)host; (void)port;
   struct io_uring_params p;
   memset(&p, 0, sizeof p);
   p.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_CQSIZE | IORING_SETUP_SUBMIT_ALL |
@@ -411,9 +416,39 @@ static void ring_init(ring *r, int idx, u32 slots, const char *host, int port) {
   if (sys_register(fd, IORING_REGISTER_EVENTFD, &r->efd, 1) < 0) { perror("register eventfd"); exit(1); }
   struct epoll_event ev = {.events = EPOLLIN | EPOLLET, .data.u32 = (u32)idx};
   epoll_ctl(epfd, EPOLL_CTL_ADD, r->efd, &ev);
-  r->lfd = listen_socket(host, port);
-  arm_accept(r);
   r->hot = 1;
+}
+
+static void cancel_accept(ring *r) {
+  struct io_uring_sqe *s = sqe_get(r);
+  s->opcode = IORING_OP_ASYNC_CANCEL;
+  s->addr = ud(OP_ACCEPT, (u8)r->idx, 0, 0);
+  s->flags = IOSQE_CQE_SKIP_SUCCESS;
+  s->user_data = ud(OP_SHUTDOWN, (u8)r->idx, 0, 0);   /* completion ignored like a shutdown's */
+}
+/* Keep exactly one ring accepting, on a ring with room: the emptiest open ring if it is at most
+ * three quarters full, else a new ring. */
+static void accept_balance(void) {
+  ring *a = &rings[acc_ring];
+  if (a->nopen + ACCEPT_SPARE < a->nslots) {
+    if (!a->accept_armed) arm_accept(a);
+    return;
+  }
+  int best = -1;
+  for (int i = 0; i < nrings; i++)
+    if (i != acc_ring && (best < 0 || rings[i].nopen < rings[best].nopen)) best = i;
+  if ((best < 0 || rings[best].nopen > ring_slots / 4 * 3) && nrings < MAX_RINGS) {
+    best = nrings++;
+    ring_init(&rings[best], best, ring_slots, 0, 0);
+    fprintf(stderr, "transport: ring %d opened (%u connections in ring %d)\n", best, a->nopen, acc_ring);
+  }
+  if (best < 0 || rings[best].nopen + ACCEPT_SPARE >= rings[best].nslots) {
+    if (!a->accept_armed) arm_accept(a);   /* everything is full: keep trying where we are */
+    return;
+  }
+  if (a->accept_armed) cancel_accept(a);
+  acc_ring = best;
+  arm_accept(&rings[best]);
 }
 
 static void transport_init(const char *host, int port, u32 want_conns) {
@@ -426,12 +461,14 @@ static void transport_init(const char *host, int port, u32 want_conns) {
   u64 per = rl.rlim_cur > 65536 ? 65536 : rl.rlim_cur;
   if (per > 1024) per -= 64;
   if (per > 65535) per = 65535;
-  nrings = (int)((want_conns + per - 1) / per);
-  if (nrings < 1) nrings = 1;
-  if (nrings > MAX_RINGS) nrings = MAX_RINGS;
+  (void)want_conns;
+  ring_slots = (u32)per;
   epfd = epoll_create1(EPOLL_CLOEXEC);
-  for (int i = 0; i < nrings; i++) ring_init(&rings[i], i, (u32)per, host, port);
-  fprintf(stderr, "transport: %d rings x %u direct descriptors\n", nrings, (unsigned)per);
+  listen_fd = listen_socket(host, port);
+  nrings = 1;
+  ring_init(&rings[0], 0, ring_slots, host, port);
+  arm_accept(&rings[0]);
+  fprintf(stderr, "transport: rings of %u direct descriptors, opened on demand (up to %d)\n", (unsigned)per, MAX_RINGS);
 }
 
 /* Implemented by the generated application. */
@@ -518,7 +555,7 @@ static void transport_run(void) {
       got += reap(r);
     }
     STAT(st_cqes += (u64)got);
-    for (int i = 0; i < nrings; i++) if (!rings[i].accept_armed) arm_accept(&rings[i]);
+    accept_balance();
     STAT(st_jobs += (u64)njobs);
     served += njobs;
     if (njobs) app_batch(jobs, njobs);
