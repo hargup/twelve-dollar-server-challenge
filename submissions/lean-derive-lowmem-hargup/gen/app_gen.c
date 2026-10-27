@@ -137,18 +137,20 @@ static u8 *arena_get(u32 n) {
   return p;
 }
 
-static int authenticate(const req_t *rq, job_t *j) {
+static inline int authenticate(const req_t *rq, job_t *j, int materialize_name) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(NO_BEARER); return 0; }
   claims_t c;
-  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, &c);
+  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, &c, materialize_name);
   if (rc == JWT_INVALID) { j->resp = ERR(BAD_TOKEN); return 0; }
   if (rc == JWT_PAYLOAD) { j->resp = ERR(BAD_PAYLOAD); return 0; }
-  u8 *name = arena_get(c.name_len + 1);
-  if (!name) { j->resp = ERR(INTERNAL); return 0; }
-  memcpy(name, c.name, c.name_len);
   j->uid = c.uid;
-  j->name = name;
-  j->name_len = c.name_len;
+  if (materialize_name) {
+    u8 *name = arena_get(c.name_len + 1);
+    if (!name) { j->resp = ERR(INTERNAL); return 0; }
+    memcpy(name, c.name, c.name_len);
+    j->name = name;
+    j->name_len = c.name_len;
+  }
   return 1;
 }
 
@@ -224,7 +226,7 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && s == e) {
-      if (!authenticate(rq, j)) return;
+      if (!authenticate(rq, j, 1)) return;
       if (!decode_create(rq, j)) return;
       j->kind = K_CREATE; j->is_write = 1;
       return;
@@ -234,7 +236,7 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && path_param(&s, e, &id_p, &id_n) && path_lit(&s, e, "/like", 5) && s == e) {
-      if (!authenticate(rq, j)) return;
+      if (!authenticate(rq, j, 0)) return;
       { int ok = parse_id(id_p, id_n, &j->id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
       j->kind = K_LIKE; j->is_write = 1;
       return;
@@ -266,10 +268,9 @@ static inline void put_post(out_t *o, i64 id, const u8 *body, u32 body_len, cons
 static int user_name(i64 uid, const u8 **author, u32 *author_len) {
   int rc = cur_seek(&C_users, uid);
   if (rc) return rc;
-  rec_t r; col_t name;
-  if (cur_record(&C_users, &r) || rec_field(&r, 1, &name) || !col_is_text(&name)) return -1;
-  *author = name.p;
-  *author_len = col_len(&name);
+  rec_t r;
+  if (cur_record(&C_users, &r)) return -1;
+  if (rec_text_after_rowid(&r, author, author_len)) return -1;
   return 0;
 }
 /* Feed.Db.rangeCounts: like counts for post ids lo..hi from one scan of likes_post_id_idx */

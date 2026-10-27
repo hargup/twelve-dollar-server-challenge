@@ -132,6 +132,14 @@ def colCheck {t : Table} {ty : Schema.Ty} (f : Field t ty) : String :=
 
 def col (f : Field t ty) : String := s!"c[{f.index.val}]"
 
+/-- Select the kernel from the field's position and preceding rowid alias. Runtime guards
+establish the one-byte encoding; schema membership never substitutes for stored-data checks. -/
+def textProjection (f : Field t .text) : String :=
+  if f.index.val == 1 && (t.cols.head?).any (·.rowid) then
+    "if (rec_text_after_rowid(&r, author, author_len)) return -1;"
+  else
+    s!"col_t name; if (rec_field(&r, {f.index.val}, &name) || !col_is_text(&name)) return -1;\n  *author = name.p; *author_len = col_len(&name);"
+
 /-- Startup check that the stored tables have exactly the derived layout. -/
 def emitSchemaCheck : String :=
   let tableCheck (t : Table) :=
@@ -165,15 +173,15 @@ def emitSeg : Seg → String
   | .lit s => let t := "/" ++ s; s!"path_lit(&s, e, {cstr t}, {bytes t})"
   | .id => "path_param(&s, e, &id_p, &id_n)"
 
-def emitCheck : Check → String
-  | .auth => "if (!authenticate(rq, j)) return;"
+def emitCheck (e : Endpoint) : Check → String
+  | .auth => s!"if (!authenticate(rq, j, {if e.needsName then 1 else 0})) return;"
   | .postId => "{ int ok = parse_id(id_p, id_n, &j->id); if (ok == 0) { j->resp = ERR(" ++ badId.name ++
       "); return; } if (ok < 0) { j->resp = ERR(" ++ noPost.name ++ "); return; } }"
   | .createBody => "if (!decode_create(rq, j)) return;"
 
 def emitRoute (r : Route) : String :=
   let cond := " && ".intercalate (r.path.map emitSeg ++ ["s == e"])
-  let checks := "\n      ".intercalate (r.checks.map emitCheck)
+  let checks := "\n      ".intercalate (r.checks.map (emitCheck r.endpoint))
   s!"  if (rq->method == {methodC r.method}) \{
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
@@ -238,7 +246,7 @@ def appGen : String :=
     ("WINDOW_SPAN", toString (feedSize - 1)),
     ("MAX_BODY_CHARS", toString maxBodyChars),
     ("POSTS_NCOLS", toString (recordNeeds posts)),
-    ("USERS_NAME_ORDINAL", toString usersName.index.val),
+    ("USERS_NAME_PROJECTION", textProjection usersName),
     ("POSTS_USER", col postsUser),
     ("POSTS_BODY", col postsBody),
     ("POSTS_CREATED", col postsCreated),

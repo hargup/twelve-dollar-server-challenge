@@ -1,6 +1,6 @@
 # Endpoint-specific authentication materialization
 
-Status: planned. Source baseline: `100234f`.
+Status: first lowering under test. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -21,3 +21,12 @@ Exercise escaped/Unicode names, missing/wrong-type claims, invalid signatures, e
 ## Experiments
 
 No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+
+### Experiment C1: materialization follows endpoint demand
+
+`Endpoint.payload` determines `needsName`. The route generator emits a constant 0/1 into
+authentication, allowing compiler specialization; both paths retain identical claim validation.
+The like path skips username unescaping and both copies. The creation path is unchanged.
+Additional tests cover missing/wrong claims, escaped Unicode usernames, signature/algorithm/
+expiration failures, and auth-before-id behavior. This shares a commit with P2 record decoding;
+benchmark each affected path and the combination.

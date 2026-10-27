@@ -70,6 +70,7 @@ def main():
             if r.returncode:
                 raise RuntimeError((out/'edge-cases.log').read_text())
             print((out/'edge-cases.log').read_text().strip(), flush=True)
+            subprocess.run(['python3', str(ROOT/'source/tests/metal/claims_cases.py')], check=True)
         elif a.mode == 'fragment':
             subprocess.run(['python3', '/root/twelve/opt-audit-1024/fragment.py', str(cg), str(out)], check=True)
             result.update(json.loads((out/'fragment.json').read_text()))

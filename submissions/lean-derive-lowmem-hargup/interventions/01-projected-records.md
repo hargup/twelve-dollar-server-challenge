@@ -29,3 +29,21 @@ column, skips trailing serial types, and avoids the three-element intermediate a
 The generated ordinal remains static; untrusted lengths and serial types remain checked.
 Control executable: `93ab6eb` (same C as typed foundation `1bf9f9b`). Candidate SHA and
 measurements will be added after the build. Lean clean build passed all 20 targets.
+
+P1 source `c420aa1`, control `93ab6eb`: official 42/42, edge cases, and SQL comparison
+for 20,000 posts passed. Interleaved thread-CPU medians (ns/request): feed 8056.01 →
+7888.08 (-2.1%); mixed batch 32: 3121.21 → 3198.46 (+2.5%); post 3366.97 →
+3386.66 (+0.6%). No competing load generator was detected; substantial isolated control
+outliers remain. Raw data: `metal/results/pair-93ab6eb-c420aa1-1793081628975389705`.
+Decision: do not keep this generic lowering as the final optimization; it does not establish
+a broad win.
+
+### Experiment P2: schema-selected physical encoding
+
+The schema identifies a text field immediately after a rowid alias. Emit a guarded one-byte
+header/type path that returns a text span directly; retain the general checked projection
+for longer encodings. This removes the intermediate column and varint loops on the common
+encoding. The pure record codec was separated for direct sanitizer testing: 20,000 generated
+valid/random records and truncated prefixes passed ASAN/UBSAN. This experiment shares a
+commit with endpoint claim specialization; read-only microbenchmarks isolate the projection,
+authentication microbenchmarks isolate claims, and mixed HTTP measures the combination.

@@ -110,7 +110,7 @@ typedef struct {
 } claims_t;
 
 /* Verify "Bearer <jwt>" token bytes (without the "Bearer " prefix). */
-static int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c) {
+static int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c, int materialize_name) {
   const u8 *d1 = memchr(t, '.', n);
   if (!d1) return JWT_INVALID;
   const u8 *d2 = memchr(d1 + 1, '.', (size_t)(t + n - d1 - 1));
@@ -160,7 +160,9 @@ static int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c) {
   if (uid <= 0) return JWT_PAYLOAD;
   if (pm[2].type != JT_STRING || pm[2].v_len > sizeof c->name) return JWT_PAYLOAD;
   c->uid = uid;
-  if (pm[2].escaped) c->name_len = json_unescape(pm[2].v, pm[2].v_len, c->name);
-  else { memcpy(c->name, pm[2].v, pm[2].v_len); c->name_len = pm[2].v_len; }
+  if (materialize_name) {
+    if (pm[2].escaped) c->name_len = json_unescape(pm[2].v, pm[2].v_len, c->name);
+    else { memcpy(c->name, pm[2].v, pm[2].v_len); c->name_len = pm[2].v_len; }
+  }
   return JWT_OK;
 }
