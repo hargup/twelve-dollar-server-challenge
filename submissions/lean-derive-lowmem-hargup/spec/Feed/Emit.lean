@@ -176,27 +176,61 @@ def emitSeg : Seg → String
   | .lit s => let t := "/" ++ s; s!"path_lit(&s, e, {cstr t}, {bytes t})"
   | .id => "path_param(&s, e, &id_p, &id_n)"
 
+def payloadName : Endpoint → String
+  | .health => "health" | .feed => "feed" | .post => "post" | .like => "like" | .create => "create"
+def argName : Arg → String
+  | .postId => "id" | .userId => "uid" | .username => "name" | .body => "text"
+def argDecl (a : Arg) : String := match a with
+  | .postId | .userId => s!"i64 {argName a};"
+  | .username | .body => s!"const u8 *{argName a}; u32 {argName a}_len;"
+def payloadAccess {e : Endpoint} {a : Arg} (_ : PayloadRef e a) : String :=
+  s!"((args_{payloadName e} *)j->payload)->{argName a}"
+
+def jobGen : String :=
+  "/* GENERATED from Endpoint.payload. */\n" ++
+  "\n".intercalate ([Endpoint.post, .like, .create].map fun e =>
+    "typedef struct { " ++ " ".intercalate (e.payload.map argDecl) ++ s!" } args_{payloadName e};") ++
+  "\ntypedef struct job {\n  u8 kind, is_write, close_after;\n  u32 conn, gen, next;\n  void *payload;\n  obuf *resp;\n} job_t;\n" ++
+  "_Static_assert(sizeof(job_t) == 32, \"compact job envelope\");\n"
+
 def emitCheck (e : Endpoint) : Check → String
-  | .auth => s!"if (!authenticate(rq, j, {if e.needsName then 1 else 0})) return;"
-  | .postId => "{ int ok = parse_id(id_p, id_n, &j->id); if (ok == 0) { j->resp = ERR(" ++ badId.name ++
+  | .auth => s!"if (!authenticate(rq, j, &claims, {if e.needsName then 1 else 0})) return;"
+  | .postId => "{ int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(" ++ badId.name ++
       "); return; } if (ok < 0) { j->resp = ERR(" ++ noPost.name ++ "); return; } }"
-  | .createBody => "if (!decode_create(rq, j)) return;"
+  | .createBody => "if (!decode_create(rq, j, &text, &text_len)) return;"
+
+def constructArg : Arg → String
+  | .postId => "a->id = id;"
+  | .userId => "a->uid = claims.uid;"
+  | .body => "a->text = text; a->text_len = text_len;"
+  | .username => "u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;"
 
 def emitRoute (r : Route) : String :=
   let cond := " && ".intercalate (r.path.map emitSeg ++ ["s == e"])
   let checks := "\n      ".intercalate (r.checks.map (emitCheck r.endpoint))
+  let args := r.endpoint.payload
+  let declarations := (if args.contains .postId then "i64 id; " else "") ++
+    (if args.contains .userId then "claims_t claims; " else "") ++
+    (if args.contains .body then "const u8 *text; u32 text_len; " else "")
+  let constructor := if args.isEmpty then "" else
+    s!"args_{payloadName r.endpoint} *a = (void *)arena_get(sizeof *a); if (!a) \{ j->resp = ERR(INTERNAL); return; } j->payload = a;\n      " ++
+    "\n      ".intercalate (args.map constructArg)
+  let stream := if r.endpoint.isWrite then "writes" else payloadName r.endpoint
   s!"  if (rq->method == {methodC r.method}) \{
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if ({cond}) \{
+      {declarations}
       {checks}
+      {constructor}
       j->kind = {r.endpoint.kind}; j->is_write = {if r.endpoint.isWrite then 1 else 0};
+      stream_append(&stream_{stream}, j, slot);
       return;
     }
   }"
 
 def emitDecode : String :=
-  "static void app_decode(const req_t *rq, job_t *j) {\n  const u8 *p = rq->path;\n  u32 n = rq->path_len;\n" ++
+  "static void app_decode(const req_t *rq, job_t *j, u32 slot) {\n  const u8 *p = rq->path;\n  u32 n = rq->path_len;\n" ++
   "\n".intercalate (routes.map emitRoute) ++ s!"\n  j->resp = ERR({notFound.name});\n}\n"
 
 /-! ## The file -/
@@ -234,6 +268,12 @@ def appGen : String :=
     ("SQL_CREATE", cstr sqlCreate),
     ("PUT_POST", emitPutPost),
     ("DECODE", emitDecode),
+    ("POST_ID", payloadAccess postIdRef),
+    ("LIKE_ID", payloadAccess likeIdRef),
+    ("LIKE_USER", payloadAccess likeUserRef),
+    ("CREATE_USER", payloadAccess createUserRef),
+    ("CREATE_NAME", payloadAccess createNameRef),
+    ("CREATE_BODY", payloadAccess createBodyRef),
     ("FEED_BEFORE", feedBefore),
     ("FEED_AFTER", feedAfter),
     ("POST_BEFORE", postBefore),
@@ -271,6 +311,6 @@ def appGen : String :=
     ("HDR_OK", hdrIdent .ok), ("HDR_CREATED", hdrIdent .created), ("HDR_UNAVAILABLE", hdrIdent .unavailable),
     ("ROOT_POSTS", cstr posts.name), ("ROOT_USERS", cstr users.name), ("ROOT_LIKES_BY_POST", cstr likesByPost.name),
     ("LIKES_BY_POST_KEYS", toString likesByPost.keys.length)
-  ]
+  ] |>.splitOn "\n" |>.map (fun line => line.trimAsciiEnd.toString) |> "\n".intercalate
 
 end Feed.Emit

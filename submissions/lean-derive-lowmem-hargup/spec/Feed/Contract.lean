@@ -168,6 +168,17 @@ def Endpoint.payload : Endpoint → List Arg
   | .like => [.postId, .userId]
   | .create => [.userId, .username, .body]
 
+/-- A field reference cannot be formed for an endpoint that does not carry it. -/
+structure PayloadRef (e : Endpoint) (a : Arg) where
+  present : a ∈ e.payload
+
+theorem postIdRef : PayloadRef .post .postId := ⟨by decide⟩
+theorem likeIdRef : PayloadRef .like .postId := ⟨by decide⟩
+theorem likeUserRef : PayloadRef .like .userId := ⟨by decide⟩
+theorem createUserRef : PayloadRef .create .userId := ⟨by decide⟩
+theorem createNameRef : PayloadRef .create .username := ⟨by decide⟩
+theorem createBodyRef : PayloadRef .create .body := ⟨by decide⟩
+
 def Endpoint.needsName (e : Endpoint) : Bool := e.payload.contains .username
 
 theorem Endpoint.needsName_iff (e : Endpoint) : e.needsName = true ↔ e = .create := by

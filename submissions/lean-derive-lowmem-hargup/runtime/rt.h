@@ -55,17 +55,6 @@ typedef struct {
 
 /* ---- jobs ------------------------------------------------------------------------------- */
 
-typedef struct job {
-  u8 kind;             /* generated job kinds; 0 = response already decided */
-  u8 is_write;
-  u8 close_after;
-  u32 conn;            /* global connection index */
-  u32 gen;             /* connection generation */
-  i64 id;              /* post id argument */
-  i64 uid;             /* authenticated user id */
-  const u8 *name; u32 name_len;   /* authenticated username (decoded, JSON-ready bytes) */
-  u8 *text; u32 text_len;         /* decoded + trimmed post body (owned, freed after the batch) */
-  obuf *resp;
-} job_t;
+#include "job_gen.h"
 
 #endif

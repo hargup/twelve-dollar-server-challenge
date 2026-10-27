@@ -182,7 +182,7 @@ static int npend;
 static inline u32 conn_id(int ri, u32 slot) { return (u32)ri << 16 | slot; }
 
 /* Implemented by the generated application: decode one request into a job. */
-static void app_decode(const req_t *rq, job_t *j);
+static void app_decode(const req_t *rq, job_t *j, u32 slot);
 
 static const u8 RESP_400[] = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 31\r\nConnection: close\r\n\r\n{\"error\":\"malformed request\"}\r\n";
 
@@ -212,7 +212,7 @@ static u32 parse_requests(ring *r, u32 slot, const u8 *p, u32 n) {
       break;
     }
     j->close_after = rq.close;
-    app_decode(&rq, j);
+    app_decode(&rq, j, njobs - 1);
     used += (u32)k;
     if (j->is_write || j->close_after) conn_hold(r, slot);   /* later requests wait for this batch */
   }

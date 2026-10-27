@@ -28,10 +28,10 @@ int main(int argc,char **argv) {
   for(int r=-100;r<rounds;r++) {
     if(!r)start=ns();
     memset(js,0,(size_t)batch*sizeof *js);
-    for(int i=0;i<batch;i++) { app_decode(&rq[(r+100+i)%1024],&js[i]); if(!js[i].kind) {fprintf(stderr,"decode failed\n");return 3;} }
+    for(int i=0;i<batch;i++) { app_decode(&rq[(r+100+i)%1024],&js[i],i); if(!js[i].kind) {fprintf(stderr,"decode failed\n");return 3;} }
     if(!decode) app_batch(js,batch);
     for(int i=0;i<batch;i++) { checksum+=js[i].kind; if(js[i].resp){checksum+=js[i].resp->len; obuf_release(js[i].resp);} }
-    if(decode) arena_used=0;
+    if(decode) app_reset();
   }
   printf("%s batch=%d ns/request=%.2f checksum=%llu sizeof_job=%zu\n",kind,batch,(double)(ns()-start)/rounds/batch,(unsigned long long)checksum,sizeof(job_t));
   return 0;

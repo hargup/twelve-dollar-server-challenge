@@ -63,3 +63,19 @@ Replace the custom physical-encoding helper with the existing decoder instantiat
 valid prefix of the schema. This directly removes the unused trailing field, adds no new
 runtime parser and reduces code complexity. Shares a commit with C2 and R1; compare the
 combined lowering with P2/C1. Sanitizer checks cover 20,000 valid records and truncations.
+
+### P3/C2/R1 measured together (`99730e2`, control `e735916`)
+
+All 42 official cases, 20,000 SQL-oracle post lookups, fragmentation/pipeline edges
+and claim validation passed as UID 65534. Paired thread-CPU medians (ns/request):
+health batch 1 2779.09 → 2409.05, health batch 32 127.97 → 121.76; mixed batch 32
+4370.35 → 3060.16, with large control variability; decode-like 1239.40 → 1270.50.
+Raw: `results/pair-e735916-99730e2-1793082571431849072`. No attribution of the noisy
+mixed delta to an individual intervention. R1 reduces each retained inline allocation
+from a 32-byte descriptor plus 1024-byte block to a single 224-byte allocation.
+
+Long escaped claims against foundation `93ab6eb`: like decode 4012.44 → 3877.22;
+create decode 4013.53 → 4156.19. Raw:
+`results/pair-93ab6eb-99730e2-longclaims-1793082657017962536`. The forced-inline
+claim specialization does not show a general decode speedup. Keep provisional pending
+end-to-end comparisons; final decisions must not cite these samples as a clear win.

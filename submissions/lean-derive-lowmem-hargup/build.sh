@@ -20,11 +20,13 @@ fi
 
 echo "== lean: check the specification and derive the application layer"
 (cd spec && "$LEAN/lake" build && "$LEAN/lake" exe derive ../build)
-if ! cmp -s build/app_gen.c gen/app_gen.c; then
+for generated in app_gen.c job_gen.h; do
+if ! cmp -s "build/$generated" "gen/$generated"; then
   echo "gen/app_gen.c is not what spec/ generates; run: (cd spec && lake exe derive ../gen)"
-  diff -u gen/app_gen.c build/app_gen.c | head -40
+  diff -u "gen/$generated" "build/$generated" | head -40
   exit 1
 fi
+done
 
 echo "== cc"
 cc -O2 -march=native -fno-plt -pthread -o bin/server \

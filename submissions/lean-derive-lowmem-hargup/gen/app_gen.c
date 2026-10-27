@@ -128,7 +128,7 @@ static int parse_id(const u8 *s, u32 n, i64 *out) {
 }
 
 /* request data that must outlive the receive buffer until the batch completes */
-static u8 arena[1 << 22];
+static _Alignas(8) u8 arena[1 << 22];
 static u32 arena_used;
 static u8 *arena_get(u32 n) {
   if (arena_used + n > sizeof arena) return 0;
@@ -137,20 +137,23 @@ static u8 *arena_get(u32 n) {
   return p;
 }
 
-static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, int materialize_name) {
+typedef struct { u32 head; job_t *tail; } job_stream;
+static job_stream stream_health = {UINT32_MAX, 0}, stream_feed = {UINT32_MAX, 0},
+                  stream_post = {UINT32_MAX, 0}, stream_writes = {UINT32_MAX, 0};
+static void stream_append(job_stream *s, job_t *j, u32 slot) {
+  j->next = UINT32_MAX;
+  if (s->tail) s->tail->next = slot; else s->head = slot;
+  s->tail = j;
+}
+static void app_reset(void) {
+  stream_health = stream_feed = stream_post = stream_writes = (job_stream){UINT32_MAX, 0};
+  arena_used = 0;
+}
+static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, claims_t *c, int materialize_name) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(NO_BEARER); return 0; }
-  claims_t c;
-  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, &c, materialize_name);
+  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, c, materialize_name);
   if (rc == JWT_INVALID) { j->resp = ERR(BAD_TOKEN); return 0; }
   if (rc == JWT_PAYLOAD) { j->resp = ERR(BAD_PAYLOAD); return 0; }
-  j->uid = c.uid;
-  if (materialize_name) {
-    u8 *name = arena_get(c.name_len + 1);
-    if (!name) { j->resp = ERR(INTERNAL); return 0; }
-    memcpy(name, c.name, c.name_len);
-    j->name = name;
-    j->name_len = c.name_len;
-  }
   return 1;
 }
 
@@ -167,7 +170,7 @@ static u32 cp_at(const u8 *p, u32 *len) {
   *len = 4;
   return (u32)(c & 0x07) << 18 | (u32)(p[1] & 0x3F) << 12 | (u32)(p[2] & 0x3F) << 6 | (p[3] & 0x3F);
 }
-static int decode_create(const req_t *rq, job_t *j) {
+static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_len) {
   jmember m[1] = {{"body", 4, 0, 0, 0, 0}};
   int rc = json_members(rq->body, rq->body_len, m, 1);
   if (rc < 0) { j->resp = ERR(BAD_JSON); return 0; }
@@ -187,20 +190,23 @@ static int decode_create(const req_t *rq, job_t *j) {
   u32 chars = 0;
   for (u32 i = a; i < b; i++) chars += (t[i] & 0xC0) != 0x80;
   if (chars > 500) { j->resp = ERR(LONG_BODY); return 0; }
-  j->text = t + a;
-  j->text_len = b - a;
+  *text = t + a;
+  *text_len = b - a;
   return 1;
 }
 
-static void app_decode(const req_t *rq, job_t *j) {
+static void app_decode(const req_t *rq, job_t *j, u32 slot) {
   const u8 *p = rq->path;
   u32 n = rq->path_len;
   if (rq->method == M_GET) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/health", 7) && s == e) {
-      
+
+
+
       j->kind = K_HEALTH; j->is_write = 0;
+      stream_append(&stream_health, j, slot);
       return;
     }
   }
@@ -208,8 +214,11 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/feed", 5) && s == e) {
-      
+
+
+
       j->kind = K_FEED; j->is_write = 0;
+      stream_append(&stream_feed, j, slot);
       return;
     }
   }
@@ -217,8 +226,12 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && path_param(&s, e, &id_p, &id_n) && s == e) {
-      { int ok = parse_id(id_p, id_n, &j->id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
+      i64 id;
+      { int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
+      args_post *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
+      a->id = id;
       j->kind = K_POST; j->is_write = 0;
+      stream_append(&stream_post, j, slot);
       return;
     }
   }
@@ -226,9 +239,15 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && s == e) {
-      if (!authenticate(rq, j, 1)) return;
-      if (!decode_create(rq, j)) return;
+      claims_t claims; const u8 *text; u32 text_len;
+      if (!authenticate(rq, j, &claims, 1)) return;
+      if (!decode_create(rq, j, &text, &text_len)) return;
+      args_create *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
+      a->uid = claims.uid;
+      u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;
+      a->text = text; a->text_len = text_len;
       j->kind = K_CREATE; j->is_write = 1;
+      stream_append(&stream_writes, j, slot);
       return;
     }
   }
@@ -236,9 +255,14 @@ static void app_decode(const req_t *rq, job_t *j) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && path_param(&s, e, &id_p, &id_n) && path_lit(&s, e, "/like", 5) && s == e) {
-      if (!authenticate(rq, j, 0)) return;
-      { int ok = parse_id(id_p, id_n, &j->id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
+      i64 id; claims_t claims;
+      if (!authenticate(rq, j, &claims, 0)) return;
+      { int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
+      args_like *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
+      a->id = id;
+      a->uid = claims.uid;
       j->kind = K_LIKE; j->is_write = 1;
+      stream_append(&stream_writes, j, slot);
       return;
     }
   }
@@ -391,25 +415,31 @@ static int post_exists(i64 id) {
   return rc == SQLITE_ROW ? 0 : rc == SQLITE_DONE ? 1 : -1;
 }
 
-static void exec_read(job_t *j) {
+static void exec_feed(job_t *j) {
   out_t o0, *o = &o0;
   int rc;
-  switch (j->kind) {
-  case K_FEED:
     out_begin(o, OUT_BIG);
     rc = native_ok && inv_ok ? feed_tail(o) : -1;
     if (rc) { out_abort(o); out_begin(o, OUT_BIG); rc = feed_sql(o); }
     if (rc) { out_abort(o); j->resp = ERR(INTERNAL); return; }
     j->resp = out_finish(o, HDR_200, sizeof HDR_200 - 1);
     return;
-  case K_POST:
+}
+
+static void exec_post(job_t *j) {
+  out_t o0, *o = &o0;
+  int rc;
     out_begin(o, OUT_SMALL);
-    rc = native_ok ? post_by_id(o, j->id) : -1;
-    if (rc < 0) { out_abort(o); out_begin(o, OUT_SMALL); rc = post_sql(o, j->id); }
+    rc = native_ok ? post_by_id(o, ((args_post *)j->payload)->id) : -1;
+    if (rc < 0) { out_abort(o); out_begin(o, OUT_SMALL); rc = post_sql(o, ((args_post *)j->payload)->id); }
     if (rc) { out_abort(o); j->resp = rc > 0 ? ERR(NO_POST) : ERR(INTERNAL); return; }
     j->resp = out_finish(o, HDR_200, sizeof HDR_200 - 1);
     return;
-  case K_HEALTH:
+}
+
+static void exec_health(job_t *j) {
+  out_t o0, *o = &o0;
+  int rc;
     rc = sqlite3_step(Q_health);
     sqlite3_reset(Q_health);
     if (rc == SQLITE_ROW) {
@@ -433,7 +463,6 @@ static void exec_read(job_t *j) {
       j->resp = out_finish(o, HDR_503, sizeof HDR_503 - 1);
     }
     return;
-  }
 }
 
 /* ---- writes ---------------------------------------------------------------------------- */
@@ -443,15 +472,15 @@ static void exec_write(job_t *j) {
   int rc;
   switch (j->kind) {
   case K_LIKE: {                                                 /* Feed.Db.like */
-    rc = post_exists(j->id);
+    rc = post_exists(((args_like *)j->payload)->id);
     if (rc) { j->resp = rc > 0 ? ERR(NO_POST) : ERR(INTERNAL); return; }
-    sqlite3_bind_int64(Q_like_insert, 1, j->uid);
-    sqlite3_bind_int64(Q_like_insert, 2, j->id);
+    sqlite3_bind_int64(Q_like_insert, 1, ((args_like *)j->payload)->uid);
+    sqlite3_bind_int64(Q_like_insert, 2, ((args_like *)j->payload)->id);
     rc = sqlite3_step(Q_like_insert);
     sqlite3_reset(Q_like_insert);
     if (rc != SQLITE_DONE) { j->resp = ERR(INTERNAL); return; }
     int already = sqlite3_changes(db) != 1;
-    i64 id = j->id;
+    i64 id = ((args_like *)j->payload)->id;
     _Static_assert(OUT_INLINE == 192 && HDR_ROOM == 96, "wire capacity contract");
   _Static_assert(HDR_ROOM + 67 <= OUT_INLINE, "bounded response fits");
   out_begin_inline(o);
@@ -475,22 +504,22 @@ static void exec_write(job_t *j) {
         else { prev_id = cur_rowid(&C_posts); prev_cl = col_len(&c[3]); memcpy(prev_cr, c[3].p, prev_cl); have_prev = 1; }
       } else if (rc < 0) inv_ok = 0;
     }
-    sqlite3_bind_int64(Q_post_insert, 1, j->uid);
-    sqlite3_bind_text(Q_post_insert, 2, (const char *)j->text, (int)j->text_len, SQLITE_STATIC);
+    sqlite3_bind_int64(Q_post_insert, 1, ((args_create *)j->payload)->uid);
+    sqlite3_bind_text(Q_post_insert, 2, (const char *)((args_create *)j->payload)->text, (int)((args_create *)j->payload)->text_len, SQLITE_STATIC);
     rc = sqlite3_step(Q_post_insert);
     if (rc != SQLITE_ROW) { sqlite3_reset(Q_post_insert); j->resp = ERR(INTERNAL); return; }
     i64 id = sqlite3_column_int64(Q_post_insert, 0);
     const u8 *created = sqlite3_column_text(Q_post_insert, 1);
     u32 created_len = (u32)sqlite3_column_bytes(Q_post_insert, 1);
     if (inv_ok && !(id == prev_id + 1 && (!have_prev || text_le(prev_cr, prev_cl, created, created_len)) &&
-                    cur_seek(&C_users, j->uid) == 0)) {             /* Feed.Db.insertOk */
+                    cur_seek(&C_users, ((args_create *)j->payload)->uid) == 0)) {             /* Feed.Db.insertOk */
       inv_ok = 0;
       fprintf(stderr, "Feed.Db.Inv no longer holds after post %lld; feed uses SQL\n", (long long)id);
     }
     out_begin(o, OUT_SMALL);
     out_need(o, 8);
   out_lit(o, "{\"post\":", 8);
-    put_post(o, id, j->text, j->text_len, created, created_len, j->name, j->name_len, 0);
+    put_post(o, id, ((args_create *)j->payload)->text, ((args_create *)j->payload)->text_len, created, created_len, ((args_create *)j->payload)->name, ((args_create *)j->payload)->name_len, 0);
     out_need(o, 1);
   out_lit(o, "}", 1);
     sqlite3_reset(Q_post_insert);
@@ -503,20 +532,23 @@ static void exec_write(job_t *j) {
 /* One batch = one transaction: reads (snapshot at batch start), then writes, then COMMIT.
  * No response leaves before the batch has committed. */
 static void app_batch(job_t *js, int n) {
-  int reads = 0, writes = 0;
-  for (int i = 0; i < n; i++) if (js[i].kind) { if (js[i].is_write) writes++; else reads++; }
-  if (reads || writes) {
+  (void)n;
+  if (stream_health.tail || stream_feed.tail || stream_post.tail || stream_writes.tail) {
     db_batch_begin();
     if (db_foreign_write) native_ok = inv_ok = 0;
     cursors_open();
-    for (int i = 0; i < n; i++) if (js[i].kind && !js[i].is_write) exec_read(&js[i]);
-    for (int i = 0; i < n; i++) if (js[i].kind && js[i].is_write) exec_write(&js[i]);
+    for (u32 i = stream_health.head; i != UINT32_MAX; i = js[i].next) exec_health(&js[i]);
+    for (u32 i = stream_feed.head; i != UINT32_MAX; i = js[i].next) exec_feed(&js[i]);
+    for (u32 i = stream_post.head; i != UINT32_MAX; i = js[i].next) exec_post(&js[i]);
+    for (u32 i = stream_writes.head; i != UINT32_MAX; i = js[i].next) exec_write(&js[i]);
     cursors_close();
-    if (db_batch_end() && writes) {
-      for (int i = 0; i < n; i++)
-        if (js[i].kind && js[i].is_write) { if (js[i].resp) obuf_release(js[i].resp); js[i].resp = ERR(INTERNAL); }
+    if (db_batch_end() && stream_writes.tail) {
+      for (u32 i = stream_writes.head; i != UINT32_MAX; i = js[i].next) {
+        if (js[i].resp) obuf_release(js[i].resp);
+        js[i].resp = ERR(INTERNAL);
+      }
       inv_ok = 0;
     }
   }
-  arena_used = 0;
+  app_reset();
 }
