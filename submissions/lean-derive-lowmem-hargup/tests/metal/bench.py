@@ -31,9 +31,15 @@ def main():
     identity = []
     if a.mode == 'overflow':
         with sqlite3.connect(db_path) as fixture:
+            fixture.execute('PRAGMA journal_mode=DELETE')
+            fixture.execute('DELETE FROM likes WHERE post_id > 30')
+            fixture.execute('DELETE FROM posts WHERE id > 30')
+            fixture.commit()
+            fixture.execute('PRAGMA page_size=512')
+            fixture.execute('VACUUM')
             uid = fixture.execute('SELECT user_id FROM posts ORDER BY id DESC LIMIT 1').fetchone()[0]
             fixture.execute('UPDATE users SET username=? WHERE id=?', ('author' * 4000, uid))
-            fixture.execute('UPDATE posts SET body=? WHERE id=(SELECT max(id) FROM posts)', ('body\\\"漢字' * 4000,))
+            fixture.execute('UPDATE posts SET body=? WHERE id=(SELECT max(id) FROM posts)', ('😀' * 500,))
     if a.unprivileged:
         nonroot_dir = pathlib.Path(tempfile.mkdtemp(prefix='twelve-opt-nonroot-'))
         os.chown(nonroot_dir, 65534, 65534)
@@ -64,6 +70,7 @@ def main():
             raise RuntimeError('startup timeout')
         result['startup_s'] = time.monotonic()-t
         if a.mode == 'overflow':
+            assert 'Feed.Db.Inv: holds' in (out/'server.log').read_text(), 'fixture must use native feed'
             subprocess.run(['python3', str(ROOT/'source/tests/metal/oracle.py'), str(db_path), '1000'], check=True)
             with sqlite3.connect(db_path) as foreign:
                 foreign.execute("UPDATE posts SET created_at='outside-format' WHERE id=(SELECT max(id) FROM posts)")
