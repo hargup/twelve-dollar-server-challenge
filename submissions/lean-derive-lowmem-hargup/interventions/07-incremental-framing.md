@@ -57,3 +57,14 @@ Eight-second mixed HTTP ABBA: control 175,099 / 179,648 req/s; candidate 155,177
 short run does not establish normal-path parity. Raw directories timestamped
 1793083564614543428, 1793083584370138143, 1793083604229395418, 1793083623998398903.
 Repeat with longer windows before final keep/reject decision.
+
+### H1 longer repeat and decision
+
+Twenty-second ABBA with improved interference monitoring: control 181,061 / 175,973
+req/s; H1 184,443 / 176,371, zero errors and no observed external loadgen/blast/cc1.
+CPU µs/request: control 5.550 / 5.693, H1 5.447 / 5.653. Raw result timestamps
+1793084718284603130, 1793084750015374982, 1793084781735206836,
+1793084813455210900. The earlier large negative outlier does not reproduce; normal
+traffic remains in the same performance range. Keep H1 for the ~19x fragmented
+parse improvement with no idle-connection storage increase; no standalone mixed-
+throughput speedup claim.

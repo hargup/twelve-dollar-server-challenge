@@ -99,3 +99,14 @@ Raw: `results/text-adbbbda-1793083350660246083`. Every run first compares comple
 serialized objects for exact equality. This is a serializer gain, not a claim that
 1%-creation mixed HTTP throughput improves by the same percentage. Keep T1; output
 remains owned and no request-local refinement is assumed for stored text.
+
+### P3 isolated prefix measurement and decision
+
+`record_micro.c` uses the actual `rec_cols` implementation with constant prefixes
+3 and 2, identical username consumers, realistic short/long record headers and
+matching checksums. Built from `8f7dabd` with `gcc -O2 -march=native`, run on CPU0
+after a quiet window, 30 million records per sample, A/B/B/A/A/B. Medians:
+short usernames 8.565 → 6.266 ns/record; long usernames 9.329 → 6.695.
+Raw: `results/record-prefix-8f7dabd.txt`. Keep P3: 27–28% less decoder CPU in this
+isolated kernel, only 2–3 ns saved per username. This is not a comparable percentage
+gain for feed/HTTP requests. P1/P2 helpers remain rejected/superseded.

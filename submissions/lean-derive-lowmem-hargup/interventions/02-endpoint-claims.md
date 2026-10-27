@@ -86,3 +86,8 @@ claim. No loadgen/compiler overlap was observed. Raw:
 Keep C3. It removes the materialization flag and intermediate decoded-name buffer,
 avoids duplicating verification, and shows a small benefit on both measured claim
 fixtures. C1/C2 lowerings are superseded; their results remain recorded above.
+
+Assembly inspection (`nm -S`) confirms one C3 `jwt_verify` (0x562 bytes), no
+standalone authentication wrapper, and `app_decode` 0xb00 bytes. Together these
+are 4,194 bytes versus C2's 0x14da-byte (5,338) decoder: 1,144 fewer code bytes.
+The constant materialization flag is gone from the interface and generated code.
