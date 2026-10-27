@@ -44,9 +44,25 @@ def likesByPost : Index := ⟨"likes_post_id_idx", "likes", ["post_id"]⟩
 /-- `PRIMARY KEY (user_id, post_id)` on likes. -/
 def likesKey : List String := ["user_id", "post_id"]
 
-/-- Position of a column in the stored record. -/
-def Table.ordinal (t : Table) (c : String) : Nat := (t.cols.findIdx? (·.name == c)).getD 0
+/-- A field belongs to this table and has the requested declared type. Stored serial
+values remain untrusted and are checked by the generated runtime decoder. -/
+structure Field (t : Table) (ty : Ty) where
+  index : Fin t.cols.length
+  typed : (t.cols[index]).ty = ty
 
-def Table.column (t : Table) (c : String) : Column := (t.cols.find? (·.name == c)).getD ⟨c, .text, false⟩
+def Field.name (f : Field t ty) : String := t.cols[f.index].name
+
+def postsUser : Field posts .integer := ⟨⟨1, by decide⟩, rfl⟩
+def postsBody : Field posts .text := ⟨⟨2, by decide⟩, rfl⟩
+def postsCreated : Field posts .text := ⟨⟨3, by decide⟩, rfl⟩
+def usersName : Field users .text := ⟨⟨1, by decide⟩, rfl⟩
+
+/-- This prefix locates the field; trailing columns are not demanded. -/
+def Field.prefix (f : Field t ty) : Nat := f.index.val + 1
+
+theorem Field.prefix_le (f : Field t ty) : f.prefix ≤ t.cols.length := by
+  have := f.index.isLt
+  unfold Field.prefix
+  omega
 
 end Feed.Schema

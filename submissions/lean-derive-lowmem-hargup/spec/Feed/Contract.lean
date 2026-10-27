@@ -1,4 +1,5 @@
 import Feed.Model
+import Feed.Wire
 
 /-!
 # The wire contract
@@ -78,45 +79,48 @@ def escapeChar (c : Char) : String :=
 
 def jsonString (s : String) : String := "\"" ++ String.join (s.toList.map escapeChar) ++ "\""
 
-/-- A JSON value whose shape is fixed and whose leaves are filled at run time. -/
-inductive Shape where
-  | obj (fields : List (String × Shape))
-  | int (var : String)          -- a C `i64` expression
-  | str (var : String)          -- a C byte string `var` with length `var_len`
-  | bool (var : String)         -- a C truth value
-  | raw (json : String)         -- constant JSON text
-  | embed (part : String)       -- JSON written by the plan that uses the shape
-  deriving Repr, Inhabited
+open Wire
 
-/-- Values for rendering a shape in Lean (the oracle). -/
-inductive Val where
-  | int (n : Int) | str (s : String) | bool (b : Bool) | json (text : String)
+/-- Every dynamic leaf is a typed reference into this shape's finite context. -/
+inductive Shape (ctx : List Binding) where
+  | obj (fields : List (String × Shape ctx))
+  | int (var : Ref ctx .int)
+  | str (var : Ref ctx .text)
+  | bool (var : Ref ctx .bool)
+  | raw (json : String)
+  | embed (part : Ref ctx .json)
 
-partial def render (env : String → Val) : Shape → String
+partial def render (env : Env ctx) : Shape ctx → String
   | .obj fs => "{" ++ ",".intercalate (fs.map fun (k, v) => jsonString k ++ ":" ++ render env v) ++ "}"
-  | .int x => match env x with | .int n => toString n | _ => "?"
-  | .str x => match env x with | .str s => jsonString s | _ => "?"
-  | .bool x => match env x with | .bool b => if b then "true" else "false" | _ => "?"
+  | .int x => toString (x.get env).toInt
+  | .str x => jsonString (x.get env)
+  | .bool x => if x.get env = true then "true" else "false"
   | .raw j => j
-  | .embed f => match env f with | .json t => t | _ => "?"
+  | .embed f => f.get env
 
-/-- The post object: `{"id","body","created_at","author","like_count"}` in this order. -/
-def postShape : Shape :=
-  .obj [("id", .int "id"), ("body", .str "body"), ("created_at", .str "created"),
-        ("author", .str "author"), ("like_count", .int "likes")]
-
-/-- `{"posts":[<post>,…]}`: the plan writes the array. -/
-def feedShape : Shape := .obj [("posts", .embed "rows")]
-def onePostShape : Shape := .obj [("post", .embed "post")]
-def likeShape : Shape := .obj [("liked", .raw "true"), ("already_liked", .bool "already"), ("post_id", .int "id")]
-def healthShape : Shape := .obj [("status", .raw "\"ok\""), ("db", .raw "\"ok\""), ("uptime_s", .int "uptime")]
-def degradedShape : Shape := .obj [("status", .raw "\"degraded\""), ("db", .raw "\"unreachable\""), ("error", .str "msg")]
+def postCtx : List Binding :=
+  [⟨"id", .int⟩, ⟨"body", .text⟩, ⟨"created", .text⟩, ⟨"author", .text⟩, ⟨"likes", .int⟩]
+def postShape : Shape postCtx :=
+  .obj [("id", .int .here), ("body", .str (.there .here)),
+        ("created_at", .str (.there (.there .here))),
+        ("author", .str (.there (.there (.there .here)))),
+        ("like_count", .int (.there (.there (.there (.there .here)))))]
+def feedShape : Shape [⟨"rows", .json⟩] := .obj [("posts", .embed .here)]
+def onePostShape : Shape [⟨"post", .json⟩] := .obj [("post", .embed .here)]
+def likeShape : Shape [⟨"already", .bool⟩, ⟨"id", .int⟩] :=
+  .obj [("liked", .raw "true"), ("already_liked", .bool .here), ("post_id", .int (.there .here))]
+def healthShape : Shape [⟨"uptime", .int⟩] :=
+  .obj [("status", .raw "\"ok\""), ("db", .raw "\"ok\""), ("uptime_s", .int .here)]
+def degradedShape : Shape [⟨"msg", .text⟩] :=
+  .obj [("status", .raw "\"degraded\""), ("db", .raw "\"unreachable\""), ("error", .str .here)]
 def errorBody (e : ErrorCase) : String := "{\"error\":" ++ jsonString e.message ++ "}"
 
-def PostView.render (v : PostView) : String :=
-  Contract.render (fun
-    | "id" => .int v.id | "body" => .str v.body | "created" => .str v.createdAt
-    | "author" => .str v.author | "likes" => .int v.likeCount | _ => .int 0) postShape
+/-- The model's natural numbers must fit the C wire domain before rendering. -/
+def PostView.render (v : PostView) : Option String :=
+  if v.id ≤ 9223372036854775807 ∧ v.likeCount ≤ 9223372036854775807 then
+    some (Contract.render (ctx := postCtx) (Int64.ofInt v.id, v.body, v.createdAt, v.author,
+      Int64.ofInt v.likeCount, ()) postShape)
+  else none
 
 /-- A complete constant response. -/
 def errorResponse (e : ErrorCase) : String :=
@@ -152,6 +156,22 @@ def Endpoint.kind : Endpoint → String
 def Endpoint.isWrite : Endpoint → Bool
   | .create | .like => true
   | _ => false
+
+/-- Values an endpoint consumes after request validation. -/
+inductive Arg where
+  | postId | userId | username | body
+  deriving Repr, DecidableEq
+
+def Endpoint.payload : Endpoint → List Arg
+  | .health | .feed => []
+  | .post => [.postId]
+  | .like => [.postId, .userId]
+  | .create => [.userId, .username, .body]
+
+def Endpoint.needsName (e : Endpoint) : Bool := e.payload.contains .username
+
+theorem Endpoint.needsName_iff (e : Endpoint) : e.needsName = true ↔ e = .create := by
+  cases e <;> decide
 
 structure Route where
   method : Method

@@ -12,7 +12,7 @@ not a claimed speedup. Design the shared type system before optimizing individua
 
 | Rank | Intervention | Reason | Status |
 |---:|---|---|---|
-| 0 | [Shared type system](00-type-system.md) | Establish facts once and drive all lowerings | planned |
+| 0 | [Shared type system](00-type-system.md) | Establish facts once and drive all lowerings | foundation implemented |
 | 1 | [Projected records](01-projected-records.md) | Up to 20 redundant decodes per feed | planned |
 | 2 | [Endpoint claims](02-endpoint-claims.md) | Eliminate unused materialization with a narrow change | planned |
 | 3 | [Bounded responses](03-bounded-responses.md) | Remove a separate allocation and select exact storage | planned |

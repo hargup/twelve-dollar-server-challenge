@@ -21,7 +21,7 @@ The runtime (`runtime/*.c`) is application independent: io_uring transport, HTTP
 JSON input scanning, HS256, output buffers and SQLite B-tree cursor primitives.
 -/
 namespace Feed.Emit
-open Contract Schema
+open Contract Schema Wire
 
 /-! ## C text helpers -/
 
@@ -60,16 +60,16 @@ inductive Piece where
   | lit (s : String) | int (v : String) | str (v : String) | bool (v : String) | embed (p : String)
   deriving Repr, Inhabited
 
-partial def pieces : Shape → List Piece
+partial def pieces : Shape ctx → List Piece
   | .obj fs =>
     let inner := fs.zipIdx.flatMap fun ((k, v), i) =>
       (if i == 0 then [] else [Piece.lit ","]) ++ [Piece.lit (jsonString k ++ ":")] ++ pieces v
     [Piece.lit "{"] ++ inner ++ [Piece.lit "}"]
-  | .int v => [.int v]
-  | .str v => [.str v]
-  | .bool v => [.bool v]
+  | .int v => [.int v.name]
+  | .str v => [.str v.name]
+  | .bool v => [.bool v.name]
   | .raw j => [.lit j]
-  | .embed p => [.embed p]
+  | .embed p => [.embed p.name]
 
 /-- Adjacent constant pieces become one literal. -/
 def merge (ps : List Piece) : List Piece :=
@@ -94,14 +94,14 @@ def room (ps : List Piece) : String :=
   " + ".intercalate (toString fixed :: strs)
 
 /-- Code for the pieces of a shape before and after its embedded part. -/
-def emitAround (s : Shape) : String × String :=
+def emitAround (s : Shape ctx) : String × String :=
   let ps := merge (pieces s)
   let before := ps.takeWhile (fun p => !(p matches .embed _))
   let after := (ps.dropWhile (fun p => !(p matches .embed _))).drop 1
   let code (xs : List Piece) := s!"out_need(o, {room xs});\n  " ++ "\n  ".intercalate (xs.map emitPiece)
   (code before, code after)
 
-def emitWhole (s : Shape) : String := (emitAround s).1
+def emitWhole (s : Shape ctx) : String := (emitAround s).1
 
 /-! ## Constant responses -/
 
@@ -124,13 +124,13 @@ def finish (s : Status) : String := s!"out_finish(&o, {hdrIdent s}, sizeof {hdrI
 def recordNeeds (t : Table) : Nat := t.cols.length
 
 /-- The record type check of a column, by its schema type. -/
-def colCheck (t : Table) (c : String) : String :=
-  let k := t.ordinal c
-  match (t.column c).ty with
+def colCheck {t : Table} {ty : Schema.Ty} (f : Field t ty) : String :=
+  let k := f.index.val
+  match ty with
   | .integer => s!"col_is_int(&c[{k}])"
   | .text => s!"col_is_text(&c[{k}])"
 
-def col (t : Table) (c : String) : String := s!"c[{t.ordinal c}]"
+def col (f : Field t ty) : String := s!"c[{f.index.val}]"
 
 /-- Startup check that the stored tables have exactly the derived layout. -/
 def emitSchemaCheck : String :=
@@ -190,17 +190,22 @@ def emitDecode : String :=
 
 /-! ## The file -/
 
-def postArgs : String := "i64 id, const u8 *body, u32 body_len, const u8 *created, u32 created_len, const u8 *author, u32 author_len, i64 likes"
+def cArg (b : Binding) : String :=
+  match b.ty with
+  | .int => s!"i64 {b.name}"
+  | .bool => s!"int {b.name}"
+  | .text | .json => s!"const u8 *{b.name}, u32 {b.name}_len"
+def postArgs : String := ", ".intercalate (postCtx.map cArg)
 
 def emitPutPost : String :=
   s!"/* Feed.Contract.postShape */\nstatic inline void put_post(out_t *o, {postArgs}) \{\n  {emitWhole postShape}\n}\n"
 
 /-- Initial send-buffer class: a shape that embeds rows (a list) starts in a big block, a single
 object in a small one. Either grows if the data needs it. -/
-partial def hasRows : Shape → Bool
+partial def hasRows : Shape ctx → Bool
   | .obj fs => fs.any fun (k, v) => (k == "posts" && v matches .embed _) || hasRows v
   | _ => false
-def bufferClass (s : Shape) : String := if hasRows s then "OUT_BIG" else "OUT_SMALL"
+def bufferClass (s : Shape ctx) : String := if hasRows s then "OUT_BIG" else "OUT_SMALL"
 
 def templateMain : String := include_str "templates/app.c"
 
@@ -234,14 +239,14 @@ def appGen : String :=
     ("MAX_BODY_CHARS", toString maxBodyChars),
     ("POSTS_NCOLS", toString (recordNeeds posts)),
     ("USERS_NCOLS", toString (recordNeeds users)),
-    ("POSTS_USER", col posts "user_id"),
-    ("POSTS_BODY", col posts "body"),
-    ("POSTS_CREATED", col posts "created_at"),
-    ("POSTS_CHECKS", " && ".intercalate [colCheck posts "user_id", colCheck posts "body", colCheck posts "created_at"]),
-    ("POSTS_CREATED_CHECK", colCheck posts "created_at"),
-    ("POSTS_USER_CHECK", colCheck posts "user_id"),
-    ("USERS_NAME", col users "username"),
-    ("USERS_NAME_CHECK", colCheck users "username"),
+    ("POSTS_USER", col postsUser),
+    ("POSTS_BODY", col postsBody),
+    ("POSTS_CREATED", col postsCreated),
+    ("POSTS_CHECKS", " && ".intercalate [colCheck postsUser, colCheck postsBody, colCheck postsCreated]),
+    ("POSTS_CREATED_CHECK", colCheck postsCreated),
+    ("POSTS_USER_CHECK", colCheck postsUser),
+    ("USERS_NAME", col usersName),
+    ("USERS_NAME_CHECK", colCheck usersName),
     ("ERR_NO_POST", noPost.name),
     ("ERR_INTERNAL", internal.name),
     ("ERR_NO_BEARER", noBearer.name),
