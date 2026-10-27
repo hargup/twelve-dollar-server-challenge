@@ -34,6 +34,14 @@
 enum { OP_ACCEPT = 1, OP_RECV, OP_SEND, OP_CLOSE, OP_SHUTDOWN };
 enum { C_FREE = 0, C_OPEN, C_CLOSING };
 
+/* Cold framing state lives with the fragment bytes; idle connections gain no fields. */
+typedef struct { frame_state frame; u8 data[]; } fragment;
+static fragment *fragment_of(u8 *p) { return p ? (fragment *)(p - offsetof(fragment, data)) : 0; }
+static frame_state frame_for(const u8 *p) {
+  if (p) return fragment_of((u8 *)p)->frame;
+  return (frame_state){0};
+}
+
 typedef struct conn {
   u16 gen;
   u8 state, recv_armed, sending, close_after, hold, pending;
@@ -144,7 +152,7 @@ static void conn_close(ring *r, u32 slot) {
   s->user_data = ud(OP_CLOSE, (u8)r->idx, c->gen, slot);
 }
 static void conn_reset(conn *c) {
-  free(c->in);
+  free(fragment_of(c->in));
   c->in = 0;
   c->in_len = c->in_cap = 0;
   for (obuf *b = c->out_head; b;) { obuf *n = b->next; obuf_release(b); b = n; }
@@ -192,14 +200,14 @@ static inline void conn_hold(ring *r, u32 slot) {
   c->hold = 1;
   if (!c->pending) { c->pending = 1; pend[npend++] = conn_id(r->idx, slot); }
 }
-static u32 parse_requests(ring *r, u32 slot, const u8 *p, u32 n) {
+static u32 parse_requests(ring *r, u32 slot, const u8 *p, u32 n, frame_state *fs) {
   conn *c = &r->conns[slot];
   u32 used = 0;
   while (used < n && !c->hold && c->state == C_OPEN) {
     req_t rq;
-    int k = http_parse(p + used, n - used, &rq);
+    int k = http_parse(p + used, n - used, &rq, fs);
     if (k == 0) break;
-    if (njobs >= MAX_JOBS - 1) { conn_hold(r, slot); break; }
+    if (njobs >= MAX_JOBS - 1) { fs->phase = FRAME_HEAD; fs->head.scanned = 0; conn_hold(r, slot); break; }
     job_t *j = &jobs[njobs++];
     memset(j, 0, sizeof *j);
     j->conn = conn_id(r->idx, slot);
@@ -218,25 +226,27 @@ static u32 parse_requests(ring *r, u32 slot, const u8 *p, u32 n) {
   }
   return used;
 }
-static void conn_keep(conn *c, const u8 *p, u32 n) {
+static void conn_keep(conn *c, const u8 *p, u32 n, const frame_state *fs) {
   if (!n) {
     /* A completed fragmented request must not leave a buffer on an idle connection. */
-    free(c->in);
+    free(fragment_of(c->in));
     c->in = 0;
     c->in_len = c->in_cap = 0;
     return;
   }
-  if (c->in == p) { c->in_len = n; return; }
+  if (c->in == p) { c->in_len = n; fragment_of(c->in)->frame = *fs; return; }
   if (n > c->in_cap) {
     u32 cap = n < 4096 ? 4096 : n * 2;
-    u8 *m = malloc(cap);
-    if (!m) abort();
+    fragment *f = malloc(sizeof *f + cap);
+    if (!f) abort();
+    u8 *m = f->data;
     if (c->in && c->in_len) memmove(m, p, n); else memcpy(m, p, n);
-    free(c->in);
+    free(fragment_of(c->in));
     c->in = m;
     c->in_cap = cap;
   } else memmove(c->in, p, n);
   c->in_len = n;
+  fragment_of(c->in)->frame = *fs;
 }
 static void on_data(ring *r, u32 slot, const u8 *p, u32 n) {
   conn *c = &r->conns[slot];
@@ -244,19 +254,22 @@ static void on_data(ring *r, u32 slot, const u8 *p, u32 n) {
     if (c->in_len + n > 65536) { conn_close(r, slot); return; }
     if (c->in_len + n > c->in_cap) {
       u32 cap = (c->in_len + n) * 2;
-      u8 *m = realloc(c->in, cap);
-      if (!m) abort();
-      c->in = m;
+      fragment *f = realloc(fragment_of(c->in), sizeof *f + cap);
+      if (!f) abort();
+      if (!c->in) f->frame = (frame_state){0};
+      c->in = f->data;
       c->in_cap = cap;
     }
     memcpy(c->in + c->in_len, p, n);
     c->in_len += n;
     if (c->hold) return;
-    u32 used = parse_requests(r, slot, c->in, c->in_len);
-    conn_keep(c, c->in + used, c->in_len - used);
+    frame_state fs = frame_for(c->in);
+    u32 used = parse_requests(r, slot, c->in, c->in_len, &fs);
+    conn_keep(c, c->in + used, c->in_len - used, &fs);
   } else {
-    u32 used = parse_requests(r, slot, p, n);
-    if (used < n) conn_keep(c, p + used, n - used);
+    frame_state fs = {0};
+    u32 used = parse_requests(r, slot, p, n, &fs);
+    if (used < n) conn_keep(c, p + used, n - used, &fs);
   }
 }
 
@@ -505,8 +518,9 @@ static void release_holds(void) {
     c->pending = 0;
     c->hold = 0;
     if (c->state != C_OPEN || !c->in_len) continue;
-    u32 used = parse_requests(r, slot, c->in, c->in_len);
-    conn_keep(c, c->in + used, c->in_len - used);
+    frame_state fs = frame_for(c->in);
+    u32 used = parse_requests(r, slot, c->in, c->in_len, &fs);
+    conn_keep(c, c->in + used, c->in_len - used, &fs);
   }
 }
 

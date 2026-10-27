@@ -3,6 +3,7 @@
 #include <immintrin.h>
 #endif
 #include <strings.h>
+#include "frame_gen.h"
 
 /* HTTP/1.1 request framing. http_parse() looks at one request at the start of p[0..n):
  *   > 0  the request is complete and used that many bytes
@@ -33,9 +34,22 @@ static u32 find_head_end(const u8 *p, u32 n) {
   return 0;
 }
 
-static int http_parse(const u8 *p, u32 n, req_t *r) {
-  u32 he = find_head_end(p, n < MAX_HEAD ? n : MAX_HEAD);
-  if (!he) return n >= MAX_HEAD ? -431 : 0;
+static int http_parse(const u8 *p, u32 n, req_t *r, frame_state *fs) {
+  if (fs && fs->phase == FRAME_BODY) {
+    u32 total = fs->body.head_len + fs->body.body_len;
+    if (n < total) return 0;
+    frame_restore_body(fs, r, p);
+    fs->phase = FRAME_HEAD; fs->head.scanned = 0;
+    return (int)total;
+  }
+  u32 begin = fs ? fs->head.scanned : 0;
+  u32 limit = n < MAX_HEAD ? n : MAX_HEAD;
+  u32 he = find_head_end(p + begin, limit - begin);
+  if (!he) {
+    if (fs) fs->head.scanned = limit > 3 ? limit - 3 : 0;
+    return n >= MAX_HEAD ? -431 : 0;
+  }
+  he += begin;
   memset(r, 0, sizeof *r);
   /* request line */
   const u8 *e = p + he - 2, *q = p;
@@ -105,7 +119,11 @@ static int http_parse(const u8 *p, u32 n, req_t *r) {
   if (chunked) return -400;   /* not used by the clients this server is specified for */
   if (clen < 0) clen = 0;
   if (clen > MAX_BODY) return -413;
-  if ((u64)he + (u64)clen > n) return 0;
+  if ((u64)he + (u64)clen > n) {
+    if (fs) frame_save_body(fs, r, p, he, (u32)clen);
+    return 0;
+  }
+  if (fs) { fs->phase = FRAME_HEAD; fs->head.scanned = 0; }
   r->body = p + he;
   r->body_len = (u32)clen;
   return (int)(he + (u32)clen);
