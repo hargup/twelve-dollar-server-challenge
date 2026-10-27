@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compare read-only HTTP requests with SQL on the original seed (not the live DB)."""
-import json, os, random, socket, sqlite3, sys
+import http.client, json, os, random, socket, sqlite3, sys
 
 seed = sys.argv[1]
 count = int(sys.argv[2]) if len(sys.argv) > 2 else 20000
@@ -12,7 +12,9 @@ db = sqlite3.connect('file:'+os.path.abspath(seed)+'?mode=ro', uri=True)
 largest = db.execute('SELECT max(id) FROM posts').fetchone()[0]
 rng = random.Random(42)
 ids = [rng.randint(1, largest) for _ in range(count)]
+ids[:min(2,count)] = [1, largest][:min(2,count)]
 expected = [dict(zip(fields, db.execute(query, (i,)).fetchone())) for i in ids]
+expected_feed = [dict(zip(fields,row)) for row in db.execute(query.replace("WHERE p.id=?", "ORDER BY p.created_at DESC, p.id DESC LIMIT 20"))]
 db.close()
 s = socket.create_connection((os.environ.get('HOST','127.0.0.1'), int(os.environ.get('PORT','3000'))), timeout=15)
 pending = b''
@@ -39,3 +41,13 @@ try:
 finally:
     s.close()
 print(f'SQL oracle: {count} random posts and exact key order passed')
+
+c = http.client.HTTPConnection(os.environ.get('HOST','127.0.0.1'), int(os.environ.get('PORT','3000')), timeout=15)
+c.request('GET', '/feed')
+r = c.getresponse()
+assert r.status == 200, r.status
+feed = json.loads(r.read())['posts']
+assert feed == expected_feed, 'feed differs from SQL'
+assert all(list(row) == fields for row in feed)
+c.close()
+print('SQL oracle: feed and exact key order passed')

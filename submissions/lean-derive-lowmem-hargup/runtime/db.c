@@ -162,7 +162,7 @@ static int db_batch_end(void) {
 
 /* Stable storage is reused, but every transaction opens fresh SQLite cursors and
  * closes them before commit. No row, page reference, or position survives a batch. */
-typedef struct { BtCursor storage; BtCursor *c; } cursor;
+typedef struct { BtCursor storage; BtCursor *c; u8 *spill; u32 spill_cap; } cursor;
 
 static void cursor_open(cursor *r, Pgno root, KeyInfo *ki) {
   r->c = &r->storage;
@@ -174,23 +174,22 @@ static void cursor_close(cursor *c) {
   c->c = 0;
 }
 
-/* Row payload. Records that spill onto overflow pages are copied into `spill`. */
+/* Row payload is borrowed until this cursor moves or reads another record. Each cursor
+ * owns its spill allocation: reading a different table must not overwrite live fields. */
 #include "record.c"
-static u8 *rec_spill;
-static u32 rec_spill_cap;
 
 static int cur_record(cursor *c, rec_t *r) {
   u32 total = sqlite3BtreePayloadSize(c->c);
   u32 local;
   const u8 *p = sqlite3BtreePayloadFetch(c->c, &local);
   if (LIKELY(local == total)) { r->p = p; r->n = total; return 0; }
-  if (total > rec_spill_cap) {
-    free(rec_spill);
-    rec_spill_cap = total + 4096;
-    if (!(rec_spill = malloc(rec_spill_cap))) abort();
+  if (total > c->spill_cap) {
+    free(c->spill);
+    c->spill_cap = total + 4096;
+    if (!(c->spill = malloc(c->spill_cap))) abort();
   }
-  if (sqlite3BtreePayload(c->c, 0, total, rec_spill) != SQLITE_OK) return -1;
-  r->p = rec_spill; r->n = total;
+  if (sqlite3BtreePayload(c->c, 0, total, c->spill) != SQLITE_OK) return -1;
+  r->p = c->spill; r->n = total;
   return 0;
 }
 static inline i64 cur_rowid(cursor *c) { return sqlite3BtreeIntegerKey(c->c); }

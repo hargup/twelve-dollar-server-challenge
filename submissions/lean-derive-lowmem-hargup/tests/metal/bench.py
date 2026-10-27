@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated benchmark harness; CPU/memory restrictions apply only to test processes."""
-import argparse, datetime, json, os, pathlib, resource, shutil, socket, subprocess, sys, time, threading, tempfile
+import argparse, datetime, json, os, pathlib, resource, shutil, socket, sqlite3, subprocess, sys, time, threading, tempfile
 ROOT = pathlib.Path('/root/twelve/opt-audit-1024/metal')
 CHALLENGE = pathlib.Path('/root/twelve/challenge')
 
@@ -10,7 +10,7 @@ def readstat(path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('variant')
-    p.add_argument('mode', choices=['check', 'load', 'fragment', 'blast'])
+    p.add_argument('mode', choices=['check', 'overflow', 'load', 'fragment', 'blast'])
     p.add_argument('--vus', type=int, default=50000)
     p.add_argument('--ramp', type=int, default=15)
     p.add_argument('--duration', type=int, default=30)
@@ -29,6 +29,11 @@ def main():
     binary = ROOT/'artifacts'/a.variant/'server'
     db_path = out/'feed.db'
     identity = []
+    if a.mode == 'overflow':
+        with sqlite3.connect(db_path) as fixture:
+            uid = fixture.execute('SELECT user_id FROM posts ORDER BY id DESC LIMIT 1').fetchone()[0]
+            fixture.execute('UPDATE users SET username=? WHERE id=?', ('author' * 4000, uid))
+            fixture.execute('UPDATE posts SET body=? WHERE id=(SELECT max(id) FROM posts)', ('body\\\"漢字' * 4000,))
     if a.unprivileged:
         nonroot_dir = pathlib.Path(tempfile.mkdtemp(prefix='twelve-opt-nonroot-'))
         os.chown(nonroot_dir, 65534, 65534)
@@ -58,7 +63,12 @@ def main():
         else:
             raise RuntimeError('startup timeout')
         result['startup_s'] = time.monotonic()-t
-        if a.mode == 'check':
+        if a.mode == 'overflow':
+            subprocess.run(['python3', str(ROOT/'source/tests/metal/oracle.py'), str(db_path), '1000'], check=True)
+            with sqlite3.connect(db_path) as foreign:
+                foreign.execute("UPDATE posts SET created_at='outside-format' WHERE id=(SELECT max(id) FROM posts)")
+            subprocess.run(['python3', str(ROOT/'source/tests/metal/oracle.py'), str(db_path), '1000'], check=True)
+        elif a.mode == 'check':
             subprocess.run(['python3', str(ROOT/'source/tests/metal/oracle.py'), str(CHALLENGE/'seed/feed.db')], check=True)
             r = subprocess.run(['bash', str(CHALLENGE/'test/test.sh'), 'http://127.0.0.1:3000'],
                                stdout=(out/'correctness.log').open('w'), stderr=subprocess.STDOUT)
