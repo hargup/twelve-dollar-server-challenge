@@ -148,7 +148,7 @@ static u32 cp_at(const u8 *p, u32 *len) {
   *len = 4;
   return (u32)(c & 0x07) << 18 | (u32)(p[1] & 0x3F) << 12 | (u32)(p[2] & 0x3F) << 6 | (p[3] & 0x3F);
 }
-static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_len) {
+static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_len, u8 *text_plain) {
   jmember m[1] = {{"body", 4, 0, 0, 0, 0}};
   int rc = json_members(rq->body, rq->body_len, m, 1);
   if (rc < 0) { j->resp = ERR(@{ERR_BAD_JSON}); return 0; }
@@ -170,6 +170,7 @@ static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_l
   if (chars > @{MAX_BODY_CHARS}) { j->resp = ERR(@{ERR_LONG_BODY}); return 0; }
   *text = t + a;
   *text_len = b - a;
+  *text_plain = !m[0].escaped; /* validated substring contains no JSON escape bytes */
   return 1;
 }
 
@@ -383,7 +384,8 @@ static void exec_write(job_t *j) {
     }
     out_begin(o, @{OBJECT_CLASS});
     @{CREATE_BEFORE}
-    put_post(o, id, @{CREATE_BODY}, @{CREATE_BODY}_len, created, created_len, @{CREATE_NAME}, @{CREATE_NAME}_len, 0);
+    if (@{CREATE_BODY}_plain) put_post_plain(o, id, @{CREATE_BODY}, @{CREATE_BODY}_len, created, created_len, @{CREATE_NAME}, @{CREATE_NAME}_len, 0);
+    else put_post(o, id, @{CREATE_BODY}, @{CREATE_BODY}_len, created, created_len, @{CREATE_NAME}, @{CREATE_NAME}_len, 0);
     @{CREATE_AFTER}
     sqlite3_reset(Q_post_insert);
     j->resp = out_finish(o, @{HDR_CREATED}, sizeof @{HDR_CREATED} - 1);

@@ -3,6 +3,15 @@
 #include <stdio.h>
 #include "out.c"
 int main(void) {
+  /* JSON parser's no-escape fact must remain valid for every trimmed substring. */
+  const u8 safe[] = "hello UTF-8 漢字 😀 / literal";
+  for (u32 a=0; a<sizeof safe-1; a++) for (u32 b=a; b<sizeof safe; b++) {
+    out_t x,y; out_begin(&x,OUT_SMALL); out_begin(&y,OUT_SMALL);
+    out_need(&x,JSTR_ROOM(b-a)); out_need(&y,b-a+2);
+    out_jstr(&x,safe+a,b-a); out_plain_jstr(&y,safe+a,b-a);
+    assert(x.p-x.start==y.p-y.start && !memcmp(x.start,y.start,x.p-x.start));
+    out_abort(&x);out_abort(&y);
+  }
   const i64 values[]={LLONG_MIN,LLONG_MIN+1,-1,0,1,LLONG_MAX};
   for(int k=0;k<1000;k++)for(unsigned i=0;i<sizeof values/sizeof *values;i++) {
     out_t o;out_begin_inline(&o);out_i64(&o,values[i]);

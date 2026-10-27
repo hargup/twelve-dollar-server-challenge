@@ -7,6 +7,25 @@ int main(int argc,char **argv) {
   if(argc!=4) return 2;
   const char *kind=argv[1]; int batch=atoi(argv[2]),rounds=atoi(argv[3]);
   if(batch<1||batch>128||rounds<1) return 2;
+  if(!strncmp(kind,"serialize-",10)) {
+    const u8 *body=(const u8 *)getenv("BENCH_TEXT"); if(!body)body=(const u8 *)"typed code says hello";
+    u32 len=strlen((const char *)body);
+    out_t x,y;out_begin(&x,OUT_SMALL);out_begin(&y,OUT_SMALL);
+    const u8 *date=(const u8 *)"2026-10-26 00:00:00", *author=(const u8 *)"alice";
+    put_post(&x,17,body,len,date,19,author,5,0);
+    put_post_plain(&y,17,body,len,date,19,author,5,0);
+    if(x.p-x.start!=y.p-y.start||memcmp(x.start,y.start,x.p-x.start))return 4;
+    out_abort(&x);out_abort(&y);
+    void (*put)(out_t*,i64,const u8*,u32,const u8*,u32,const u8*,u32,i64)=
+      !strcmp(kind,"serialize-plain")?put_post_plain:put_post;
+    u64 start=ns(),checksum=0;
+    for(int i=0;i<rounds;i++) {
+      out_t o;out_begin(&o,OUT_SMALL);put(&o,17,body,len,date,19,author,5,0);
+      checksum+=o.p-o.start;out_abort(&o);
+    }
+    printf("%s batch=1 ns/request=%.2f checksum=%llu sizeof_job=%zu\n",kind,(double)(ns()-start)/rounds,(unsigned long long)checksum,sizeof(job_t));
+    return 0;
+  }
   db_open(getenv("SQLITE_PATH")); app_init(); app_check_inv();
   const char *key="twelve-dollar-challenge"; hmac_init((const u8*)key,strlen(key)); now_s=time(0);
   int decode=!strncmp(kind,"decode-",7);

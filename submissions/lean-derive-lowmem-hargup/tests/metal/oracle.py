@@ -37,7 +37,7 @@ try:
             pending = body[length:]
             post = json.loads(body[:length])['post']
             assert list(post) == fields, post
-            assert post == expected[start+i], (batch[i],post,expected[start+i])
+            assert post == expected[start+i], f'post {batch[i]} differs from SQL'
 finally:
     s.close()
 print(f'SQL oracle: {count} random posts and exact key order passed')

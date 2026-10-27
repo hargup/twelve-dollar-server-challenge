@@ -58,7 +58,7 @@ def fill (tpl : String) (kvs : List (String × String)) : String :=
 /-! ## Serializers from shapes -/
 
 inductive Piece where
-  | lit (s : String) | int (v : String) | str (v : String) | bool (v : String) | embed (p : String)
+  | lit (s : String) | int (v : String) | str (v : String) | plainStr (v : String) | bool (v : String) | embed (p : String)
   deriving Repr, Inhabited
 
 partial def pieces : Shape ctx → List Piece
@@ -68,6 +68,7 @@ partial def pieces : Shape ctx → List Piece
     [Piece.lit "{"] ++ inner ++ [Piece.lit "}"]
   | .int v => [.int v.name]
   | .str v => [.str v.name]
+  | .plainStr v => [.plainStr v.name]
   | .bool v => [.bool v.name]
   | .raw j => [.lit j]
   | .embed p => [.embed p.name]
@@ -84,6 +85,7 @@ def emitPiece : Piece → String
   | .lit s => outLit s
   | .int v => s!"out_i64(o, {v});"
   | .str v => s!"out_jstr(o, {v}, {v}_len);"
+  | .plainStr v => s!"out_plain_jstr(o, {v}, {v}_len);"
   | .bool v => s!"if ({v}) " ++ outLit "true" ++ " else " ++ outLit "false"
   | .embed _ => ""
 
@@ -91,7 +93,7 @@ def emitPiece : Piece → String
 def room (ps : List Piece) : String :=
   let fixed := ps.foldl (fun n p => match p with
     | .lit s => n + bytes s | .int _ => n + 20 | .bool _ => n + 5 | _ => n) 0
-  let strs := ps.filterMap fun p => match p with | .str v => some s!"JSTR_ROOM({v}_len)" | _ => none
+  let strs := ps.filterMap fun p => match p with | .str v => some s!"JSTR_ROOM({v}_len)" | .plainStr v => some s!"({v}_len + 2)" | _ => none
   " + ".intercalate (toString fixed :: strs)
 
 /-- Code for the pieces of a shape before and after its embedded part. -/
@@ -182,7 +184,8 @@ def argName : Arg → String
   | .postId => "id" | .userId => "uid" | .username => "name" | .body => "text"
 def argDecl (a : Arg) : String := match a with
   | .postId | .userId => s!"i64 {argName a};"
-  | .username | .body => s!"const u8 *{argName a}; u32 {argName a}_len;"
+  | .username => s!"const u8 *{argName a}; u32 {argName a}_len;"
+  | .body => "const u8 *text; u32 text_len; u8 text_plain;"
 def payloadAccess {e : Endpoint} {a : Arg} (_ : PayloadRef e a) : String :=
   s!"((args_{payloadName e} *)j->payload)->{argName a}"
 
@@ -197,12 +200,12 @@ def emitCheck (e : Endpoint) : Check → String
   | .auth => s!"if (!authenticate(rq, j, &claims, {if e.needsName then 1 else 0})) return;"
   | .postId => "{ int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(" ++ badId.name ++
       "); return; } if (ok < 0) { j->resp = ERR(" ++ noPost.name ++ "); return; } }"
-  | .createBody => "if (!decode_create(rq, j, &text, &text_len)) return;"
+  | .createBody => "if (!decode_create(rq, j, &text, &text_len, &text_plain)) return;"
 
 def constructArg : Arg → String
   | .postId => "a->id = id;"
   | .userId => "a->uid = claims.uid;"
-  | .body => "a->text = text; a->text_len = text_len;"
+  | .body => "a->text = text; a->text_len = text_len; a->text_plain = text_plain;"
   | .username => "u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;"
 
 def emitRoute (r : Route) : String :=
@@ -211,7 +214,7 @@ def emitRoute (r : Route) : String :=
   let args := r.endpoint.payload
   let declarations := (if args.contains .postId then "i64 id; " else "") ++
     (if args.contains .userId then "claims_t claims; " else "") ++
-    (if args.contains .body then "const u8 *text; u32 text_len; " else "")
+    (if args.contains .body then "const u8 *text; u32 text_len; u8 text_plain; " else "")
   let constructor := if args.isEmpty then "" else
     s!"args_{payloadName r.endpoint} *a = (void *)arena_get(sizeof *a); if (!a) \{ j->resp = ERR(INTERNAL); return; } j->payload = a;\n      " ++
     "\n      ".intercalate (args.map constructArg)
@@ -239,7 +242,7 @@ def cArg (b : Binding) : String :=
   match b.ty with
   | .int => s!"i64 {b.name}"
   | .bool => s!"int {b.name}"
-  | .text | .json => s!"const u8 *{b.name}, u32 {b.name}_len"
+  | .text | .plainText | .json => s!"const u8 *{b.name}, u32 {b.name}_len"
 def postArgs : String := ", ".intercalate (postCtx.map cArg)
 
 def emitPutPost : String :=
@@ -266,7 +269,8 @@ def appGen : String :=
     ("SQL_POST_EXISTS", cstr sqlPostExists),
     ("SQL_LIKE", cstr sqlLike),
     ("SQL_CREATE", cstr sqlCreate),
-    ("PUT_POST", emitPutPost),
+    ("PUT_POST", emitPutPost ++
+      s!"static inline void put_post_plain(out_t *o, {postArgs}) \{\n  {emitWhole postPlainShape}\n}\n"),
     ("DECODE", emitDecode),
     ("POST_ID", payloadAccess postIdRef),
     ("LIKE_ID", payloadAccess likeIdRef),

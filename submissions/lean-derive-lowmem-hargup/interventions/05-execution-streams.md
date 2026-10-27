@@ -42,3 +42,18 @@ would accumulate links to reused stack slots. Its driver must measure the actual
 entry points with correct slot indices, preserving comparability with the archived executable.
 Test mixed pipelines, creates followed by reads/likes, disconnects, errors and zero-read/write
 batches before accepting any timings. Compare small and large batches, then mixed HTTP.
+
+### J1/S1 (`ce57153` versus `99730e2`)
+
+All 42 official API cases, 20,000 random SQL post checks, pipeline/fragment edges and
+claim checks passed under UID 65534. `sizeof(job_t)` is 32 (was 72); post payload 8,
+like payload 16, creation payload 40 bytes; health/feed allocate no payload.
+Interleaved thread-CPU medians ns/request: health batch32 123.46 → 119.60; mixed32
+3038.10 → 3091.58; post32 740.02 → 633.85 (noisy); like decode 1208.34 → 1227.10;
+create decode 1329.79 → 1341.13. Raw:
+`results/pair-99730e2-ce57153-1793082861234507110`.
+
+The representation saves 40 bytes per hot job and removes classification passes;
+CPU results are mixed, with small decode overhead and no established mixed win.
+Keep provisional until paired network comparison; do not report post improvement
+as reliable given its large per-sample spread.

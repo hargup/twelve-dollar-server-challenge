@@ -1,7 +1,7 @@
 /-! Typed wire contexts. References carry membership and type; no runtime tags are emitted. -/
 namespace Feed.Wire
 inductive Ty where
-  | int | text | bool | json
+  | int | text | plainText | bool | json
   deriving Repr, DecidableEq
 structure Binding where
   name : String
@@ -13,10 +13,17 @@ inductive Ref : List Binding → Ty → Type where
 def Ref.name : Ref bs t → String
   | @Ref.here b _ => b.name
   | .there r => r.name
+/-- Evidence needed to copy string contents without JSON escaping. The parser's validated
+unescaped-string branch establishes this boundary; trimming preserves it. -/
+structure PlainText where
+  value : String
+  safe : ∀ c ∈ value.toList, c.toNat ≥ 32 ∧ c ≠ '"' ∧ c ≠ '\\'
+
 /-- Machine integers match the generated C serializer's domain. -/
 abbrev Value : Ty → Type
   | .int => Int64
   | .text | .json => String
+  | .plainText => PlainText
   | .bool => Bool
 def Env : List Binding → Type
   | [] => Unit

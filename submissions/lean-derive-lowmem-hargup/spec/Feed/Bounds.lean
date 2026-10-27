@@ -14,7 +14,7 @@ def Shape.fixedBound : Nat → Shape ctx → Option Nat
   | _ + 1, .int _ => some 20
   | _ + 1, .bool _ => some 5
   | _ + 1, .raw s => some s.utf8ByteSize
-  | _ + 1, .str _ | _ + 1, .embed _ => none
+  | _ + 1, .str _ | _ + 1, .plainStr _ | _ + 1, .embed _ => none
 
 /-- Capacity selection requires evidence from the actual wire shape, not an endpoint label. -/
 structure Bounded (s : Shape ctx) (capacity : Nat) where

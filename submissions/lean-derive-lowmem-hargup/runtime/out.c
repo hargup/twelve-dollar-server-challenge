@@ -113,6 +113,11 @@ static inline void out_i64(out_t *o, i64 v) {
 /* JSON string: escapes '"', '\\' and control characters; UTF-8 passes through unchanged.
  * Needs room for 6*n + 2 bytes (+16 for the vector stores). */
 #define JSTR_ROOM(n) (6u * (n) + 18u)
+/* Requires validated unescaped JSON contents (or a substring of them). */
+static inline void out_plain_jstr(out_t *o, const u8 *s, u32 n) {
+  *o->p++ = '"'; memcpy(o->p, s, n); o->p += n; *o->p++ = '"';
+}
+
 static inline void out_jstr(out_t *o, const u8 *s, u32 n) {
   u8 *d = o->p;
   *d++ = '"';

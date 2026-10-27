@@ -47,3 +47,18 @@ to u32 with UINT32_MAX as the empty-list sentinel. The parser already bounds job
 passes `njobs-1`; the benchmark driver passes its local array index. A stream append writes
 the previous tail's next index, and app_batch follows indices relative to its `js` array.
 The envelope/streams are one coherent representation change and will be measured together.
+
+### J1/S1 (`ce57153` versus `99730e2`)
+
+All 42 official API cases, 20,000 random SQL post checks, pipeline/fragment edges and
+claim checks passed under UID 65534. `sizeof(job_t)` is 32 (was 72); post payload 8,
+like payload 16, creation payload 40 bytes; health/feed allocate no payload.
+Interleaved thread-CPU medians ns/request: health batch32 123.46 → 119.60; mixed32
+3038.10 → 3091.58; post32 740.02 → 633.85 (noisy); like decode 1208.34 → 1227.10;
+create decode 1329.79 → 1341.13. Raw:
+`results/pair-99730e2-ce57153-1793082861234507110`.
+
+The representation saves 40 bytes per hot job and removes classification passes;
+CPU results are mixed, with small decode overhead and no established mixed win.
+Keep provisional until paired network comparison; do not report post improvement
+as reliable given its large per-sample spread.

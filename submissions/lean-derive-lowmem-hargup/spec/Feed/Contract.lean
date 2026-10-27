@@ -86,6 +86,7 @@ inductive Shape (ctx : List Binding) where
   | obj (fields : List (String × Shape ctx))
   | int (var : Ref ctx .int)
   | str (var : Ref ctx .text)
+  | plainStr (var : Ref ctx .plainText)
   | bool (var : Ref ctx .bool)
   | raw (json : String)
   | embed (part : Ref ctx .json)
@@ -94,17 +95,22 @@ partial def render (env : Env ctx) : Shape ctx → String
   | .obj fs => "{" ++ ",".intercalate (fs.map fun (k, v) => jsonString k ++ ":" ++ render env v) ++ "}"
   | .int x => toString (x.get env).toInt
   | .str x => jsonString (x.get env)
+  | .plainStr x => "\"" ++ (x.get env).value ++ "\""
   | .bool x => if x.get env = true then "true" else "false"
   | .raw j => j
   | .embed f => f.get env
 
-def postCtx : List Binding :=
-  [⟨"id", .int⟩, ⟨"body", .text⟩, ⟨"created", .text⟩, ⟨"author", .text⟩, ⟨"likes", .int⟩]
-def postShape : Shape postCtx :=
-  .obj [("id", .int .here), ("body", .str (.there .here)),
+def postCtxFor (bodyTy : Wire.Ty) : List Binding :=
+  [⟨"id", .int⟩, ⟨"body", bodyTy⟩, ⟨"created", .text⟩, ⟨"author", .text⟩, ⟨"likes", .int⟩]
+def postShapeWith {t : Wire.Ty} (bodyShape : Ref (postCtxFor t) t → Shape (postCtxFor t)) : Shape (postCtxFor t) :=
+  .obj [("id", .int .here), ("body", bodyShape (.there .here)),
         ("created_at", .str (.there (.there .here))),
         ("author", .str (.there (.there (.there .here)))),
         ("like_count", .int (.there (.there (.there (.there .here)))))]
+def postCtx := postCtxFor .text
+def postShape : Shape postCtx := postShapeWith Shape.str
+def postPlainShape : Shape (postCtxFor .plainText) := postShapeWith Shape.plainStr
+
 def feedShape : Shape [⟨"rows", .json⟩] := .obj [("posts", .embed .here)]
 def onePostShape : Shape [⟨"post", .json⟩] := .obj [("post", .embed .here)]
 def likeShape : Shape [⟨"already", .bool⟩, ⟨"id", .int⟩] :=

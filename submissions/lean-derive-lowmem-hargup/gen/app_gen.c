@@ -170,7 +170,7 @@ static u32 cp_at(const u8 *p, u32 *len) {
   *len = 4;
   return (u32)(c & 0x07) << 18 | (u32)(p[1] & 0x3F) << 12 | (u32)(p[2] & 0x3F) << 6 | (p[3] & 0x3F);
 }
-static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_len) {
+static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_len, u8 *text_plain) {
   jmember m[1] = {{"body", 4, 0, 0, 0, 0}};
   int rc = json_members(rq->body, rq->body_len, m, 1);
   if (rc < 0) { j->resp = ERR(BAD_JSON); return 0; }
@@ -192,6 +192,7 @@ static int decode_create(const req_t *rq, job_t *j, const u8 **text, u32 *text_l
   if (chars > 500) { j->resp = ERR(LONG_BODY); return 0; }
   *text = t + a;
   *text_len = b - a;
+  *text_plain = !m[0].escaped; /* validated substring contains no JSON escape bytes */
   return 1;
 }
 
@@ -239,13 +240,13 @@ static void app_decode(const req_t *rq, job_t *j, u32 slot) {
     const u8 *s = p, *e = p + n, *id_p = 0; u32 id_n = 0;
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && s == e) {
-      claims_t claims; const u8 *text; u32 text_len;
+      claims_t claims; const u8 *text; u32 text_len; u8 text_plain;
       if (!authenticate(rq, j, &claims, 1)) return;
-      if (!decode_create(rq, j, &text, &text_len)) return;
+      if (!decode_create(rq, j, &text, &text_len, &text_plain)) return;
       args_create *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
       a->uid = claims.uid;
       u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;
-      a->text = text; a->text_len = text_len;
+      a->text = text; a->text_len = text_len; a->text_plain = text_plain;
       j->kind = K_CREATE; j->is_write = 1;
       stream_append(&stream_writes, j, slot);
       return;
@@ -277,6 +278,20 @@ static inline void put_post(out_t *o, i64 id, const u8 *body, u32 body_len, cons
   out_i64(o, id);
   out_lit(o, ",\"body\":", 8);
   out_jstr(o, body, body_len);
+  out_lit(o, ",\"created_at\":", 14);
+  out_jstr(o, created, created_len);
+  out_lit(o, ",\"author\":", 10);
+  out_jstr(o, author, author_len);
+  out_lit(o, ",\"like_count\":", 14);
+  out_i64(o, likes);
+  out_lit(o, "}", 1);
+}
+static inline void put_post_plain(out_t *o, i64 id, const u8 *body, u32 body_len, const u8 *created, u32 created_len, const u8 *author, u32 author_len, i64 likes) {
+  out_need(o, 93 + (body_len + 2) + JSTR_ROOM(created_len) + JSTR_ROOM(author_len));
+  out_lit(o, "{\"id\":", 6);
+  out_i64(o, id);
+  out_lit(o, ",\"body\":", 8);
+  out_plain_jstr(o, body, body_len);
   out_lit(o, ",\"created_at\":", 14);
   out_jstr(o, created, created_len);
   out_lit(o, ",\"author\":", 10);
@@ -519,7 +534,8 @@ static void exec_write(job_t *j) {
     out_begin(o, OUT_SMALL);
     out_need(o, 8);
   out_lit(o, "{\"post\":", 8);
-    put_post(o, id, ((args_create *)j->payload)->text, ((args_create *)j->payload)->text_len, created, created_len, ((args_create *)j->payload)->name, ((args_create *)j->payload)->name_len, 0);
+    if (((args_create *)j->payload)->text_plain) put_post_plain(o, id, ((args_create *)j->payload)->text, ((args_create *)j->payload)->text_len, created, created_len, ((args_create *)j->payload)->name, ((args_create *)j->payload)->name_len, 0);
+    else put_post(o, id, ((args_create *)j->payload)->text, ((args_create *)j->payload)->text_len, created, created_len, ((args_create *)j->payload)->name, ((args_create *)j->payload)->name_len, 0);
     out_need(o, 1);
   out_lit(o, "}", 1);
     sqlite3_reset(Q_post_insert);

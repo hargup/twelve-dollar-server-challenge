@@ -21,3 +21,18 @@ Test ASCII, escapes, control characters, BMP/astral UTF-8, trim behavior, timest
 ## Experiments
 
 No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+
+### T1 design and implementation
+
+`Wire.PlainText` carries a per-character no-escape predicate. `Shape.plainStr` requires
+a reference of that type; the common post-shape constructor instantiates either generic
+text or plain text. The emitter selects exact `n+2` capacity and a quoted memcpy for
+the latter. The C trust boundary is the existing JSON scanner: only its validated
+`escaped == false` branch constructs plain text. Trimming takes a substring, preserving
+the property; no extra scan or sizing pass is added. A flag occupies existing padding
+in the creation payload. General stored body/author/timestamp fields retain escaping.
+
+Do not add a global timestamp invariant: its setup/invalidation complexity adds an extra
+stored-data property for a small field; T1 directly tests the request-local opportunity.
+ASAN/UBSAN compares the copy and general serializer for every substring of representative
+plain UTF-8 bytes. Existing edge/claim cases exercise escaped and unescaped creation.
