@@ -1,7 +1,7 @@
 /-! Typed wire contexts. References carry membership and type; no runtime tags are emitted. -/
 namespace Feed.Wire
 inductive Ty where
-  | int | text | plainText | bool | json
+  | int | text | plainText | bool | json | fd | u32 | u64
   deriving Repr, DecidableEq
 structure Binding where
   name : String
@@ -25,6 +25,9 @@ abbrev Value : Ty → Type
   | .text | .json => String
   | .plainText => PlainText
   | .bool => Bool
+  | .fd => Int32
+  | .u32 => UInt32
+  | .u64 => UInt64
 def Env : List Binding → Type
   | [] => Unit
   | b :: bs => Value b.ty × Env bs

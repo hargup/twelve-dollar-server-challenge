@@ -42,3 +42,18 @@ headers, large fragmented bodies, pipelined prefixes and size limits. ASAN/UBSAN
 locally. `transport_cases.c` exercises the actual cold allocation/growth/release and
 write/capacity hold paths on Linux without opening a ring. Network tests and ordinary
 traffic comparison remain required before keeping H1.
+
+### H1 (`9c2439f`, control `adbbbda`)
+
+Linux transport ownership tests passed ASAN/UBSAN. Framing microbenchmark with a
+16 KB body delivered in 31-byte fragments: stateless median 26,449 ns/request,
+incremental 1,378 ns/request (~19x less parsing CPU). Identical completion checksums.
+All API, SQL post/feed, edge and claim tests passed UID 65534. The 10,000-connection
+fragment test returned to idle with 1,605,632 bytes anonymous growth (cold fragment
+allocations released); raw `results/9c2439f-fragment-1793083552003916275`.
+
+Eight-second mixed HTTP ABBA: control 175,099 / 179,648 req/s; candidate 155,177 /
+185,573 req/s, zero errors in all runs. The candidate has a large outlier and this
+short run does not establish normal-path parity. Raw directories timestamped
+1793083564614543428, 1793083584370138143, 1793083604229395418, 1793083623998398903.
+Repeat with longer windows before final keep/reject decision.

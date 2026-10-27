@@ -1,5 +1,6 @@
 import Feed.Emit
 import Feed.Frame
+import Feed.Sqe
 
 /-- `lake exe derive <dir>`: write the generated application layer to `<dir>/app_gen.c`. -/
 def main (args : List String) : IO UInt32 := do
@@ -8,5 +9,6 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile (dir ++ "/app_gen.c") Feed.Emit.appGen
   IO.FS.writeFile (dir ++ "/job_gen.h") Feed.Emit.jobGen
   IO.FS.writeFile (dir ++ "/frame_gen.h") Feed.Frame.header
+  IO.FS.writeFile (dir ++ "/sqe_gen.h") Feed.Sqe.header
   IO.println s!"wrote {dir}/app_gen.c"
   return 0

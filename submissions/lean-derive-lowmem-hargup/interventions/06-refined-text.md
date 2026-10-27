@@ -36,3 +36,23 @@ Do not add a global timestamp invariant: its setup/invalidation complexity adds 
 stored-data property for a small field; T1 directly tests the request-local opportunity.
 ASAN/UBSAN compares the copy and general serializer for every substring of representative
 plain UTF-8 bytes. Existing edge/claim cases exercise escaped and unescaped creation.
+
+### Overflow lifetime regression and T1 results
+
+The first overflow fixture exceeded the schema's 500-character body constraint and
+failed during setup; it was invalid evidence. Harness correction `dd12d01` keeps 30
+dense seed posts, uses 512-byte SQLite pages, a valid 500-emoji body and a long username.
+Startup confirms the native feed invariant holds. Old `ce57153` then produces invalid
+UTF-8 on a post read; fixed `adbbbda` passes 1,000 random/deterministic post checks and
+the feed SQL oracle, then passes again after a foreign write changes a timestamp.
+Raw fixed result: `results/adbbbda-overflow-1793083331022446433`. Cursor fix `7de6f60`
+is mandatory correctness work independent of performance decisions.
+
+T1 `adbbbda` passes 42 official cases, 20,000 SQL post checks plus feed, pipelines,
+escaping and claims under UID 65534. Generated serializer A/B/B/A/A/B medians
+(ns/object): short 34.91 → 28.74; 500 ASCII chars 98.91 → 36.69; 500 emoji
+(2,000 UTF-8 bytes) 208.73 → 79.09. No observed loadgen/compiler overlap.
+Raw: `results/text-adbbbda-1793083350660246083`. Every run first compares complete
+serialized objects for exact equality. This is a serializer gain, not a claim that
+1%-creation mixed HTTP throughput improves by the same percentage. Keep T1; output
+remains owned and no request-local refinement is assumed for stored text.

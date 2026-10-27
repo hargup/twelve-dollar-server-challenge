@@ -241,6 +241,9 @@ def emitDecode : String :=
 def cArg (b : Binding) : String :=
   match b.ty with
   | .int => s!"i64 {b.name}"
+  | .fd => s!"int {b.name}"
+  | .u32 => s!"u32 {b.name}"
+  | .u64 => s!"u64 {b.name}"
   | .bool => s!"int {b.name}"
   | .text | .plainText | .json => s!"const u8 *{b.name}, u32 {b.name}_len"
 def postArgs : String := ", ".intercalate (postCtx.map cArg)

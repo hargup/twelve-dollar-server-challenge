@@ -24,7 +24,9 @@
 #include <time.h>
 
 #define MAX_RINGS 16
+#ifndef SQ_ENTRIES
 #define SQ_ENTRIES 4096
+#endif
 #define CQ_ENTRIES 32768
 #define NBUF 512            /* provided receive buffers per ring */
 #define BUFSZ 2048
@@ -72,66 +74,76 @@ static u32 ring_slots;
 static int epfd;
 static i64 now_s;           /* wall clock seconds, refreshed every iteration */
 
+#ifdef STATS
+static u64 st_iters, st_enters, st_cqes, st_jobs, st_sleeps, st_waits, st_sqes, st_pubs;
+static void stats_tick(void) {
+  static i64 last;
+  if (now_s - last < 10) return;
+  if (last) fprintf(stderr, "stats: iters %llu enters %llu cqes %llu jobs %llu sleeps %llu waits %llu | jobs/iter %.1f enters/job %.2f sqes %llu tail-publishes %llu\n",
+                    st_iters, st_enters, st_cqes, st_jobs, st_sleeps, st_waits, st_iters ? (double)st_jobs / st_iters : 0,
+                    st_jobs ? (double)st_enters / st_jobs : 0, st_sqes, st_pubs);
+  last = now_s;
+  st_iters = st_enters = st_cqes = st_jobs = st_sleeps = st_waits = st_sqes = st_pubs = 0;
+}
+#define STAT(x) (x)
+#else
+#define STAT(x) ((void)0)
+#endif
+
+
 static inline int sys_setup(u32 e, struct io_uring_params *p) { return (int)syscall(__NR_io_uring_setup, e, p); }
 static inline int sys_enter(int fd, u32 sub, u32 minc, u32 flags) { return (int)syscall(__NR_io_uring_enter, fd, sub, minc, flags, NULL, 0); }
 static inline int sys_register(int fd, u32 op, void *arg, u32 n) { return (int)syscall(__NR_io_uring_register, fd, op, arg, n); }
 
 static inline u64 ud(u8 op, u8 ri, u16 gen, u32 slot) { return (u64)op << 56 | (u64)ri << 48 | (u64)gen << 32 | slot; }
 
-static void ring_flush(ring *r) {
-  if (!r->to_submit) return;
+/* The shared tail sees only fully initialized entries, immediately before entry. */
+static int ring_enter(ring *r) {
+  if (r->to_submit) { __atomic_store_n(r->sq_ktail, r->sq_tail, __ATOMIC_RELEASE); STAT(st_pubs++); }
   int rc;
-  do rc = sys_enter(r->fd, r->to_submit, 0, IORING_ENTER_GETEVENTS);
+  do { STAT(st_enters++); rc = sys_enter(r->fd, r->to_submit, 0, IORING_ENTER_GETEVENTS); }
   while (rc < 0 && errno == EINTR);
   if (rc < 0) { perror("io_uring_enter"); exit(1); }
   r->to_submit -= (u32)rc;
+  return rc;
 }
-static struct io_uring_sqe *sqe_get(ring *r) {
+static void ring_flush(ring *r) { if (r->to_submit) (void)ring_enter(r); }
+static void sqe_ensure(ring *r, u32 count) {
   u32 head = __atomic_load_n(r->sq_khead, __ATOMIC_ACQUIRE);
-  if (r->sq_tail - head >= r->sq_entries) {
-    ring_flush(r);
+  while (r->sq_tail - head + count > r->sq_entries) {
+    if (!r->to_submit || !ring_enter(r)) { fprintf(stderr, "fatal: submission queue made no progress\n"); exit(1); }
     head = __atomic_load_n(r->sq_khead, __ATOMIC_ACQUIRE);
-    if (r->sq_tail - head >= r->sq_entries) { fprintf(stderr, "fatal: submission queue full\n"); exit(1); }
   }
+}
+typedef struct { struct io_uring_sqe *p; } sqe_reserved;
+typedef struct { struct io_uring_sqe *p; } sqe_ready;
+static sqe_reserved sqe_reserve(ring *r) {
+  sqe_ensure(r, 1);
   struct io_uring_sqe *s = &r->sqes[r->sq_tail & r->sq_mask];
   memset(s, 0, sizeof *s);
+  return (sqe_reserved){s};
+}
+static void sqe_commit(ring *r, sqe_ready ready) {
+  (void)ready;
   r->sq_tail++;
   r->to_submit++;
-  __atomic_store_n(r->sq_ktail, r->sq_tail, __ATOMIC_RELEASE);
-  return s;
+  STAT(st_sqes++);
 }
+#include "sqe_gen.h"
 
 static void arm_accept(ring *r) {
-  struct io_uring_sqe *s = sqe_get(r);
-  s->opcode = IORING_OP_ACCEPT;
-  s->fd = listen_fd;
-  s->ioprio = IORING_ACCEPT_MULTISHOT;
-  s->file_index = IORING_FILE_INDEX_ALLOC;
-  s->user_data = ud(OP_ACCEPT, (u8)r->idx, 0, 0);
+  sqe_accept(r, listen_fd, ud(OP_ACCEPT, (u8)r->idx, 0, 0));
   r->accept_armed = 1;
 }
 static void arm_recv(ring *r, u32 slot) {
   conn *c = &r->conns[slot];
-  struct io_uring_sqe *s = sqe_get(r);
-  s->opcode = IORING_OP_RECV;
-  s->fd = (int)slot;
-  s->flags = IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
-  s->ioprio = IORING_RECV_MULTISHOT;
-  s->buf_group = 0;
-  s->user_data = ud(OP_RECV, (u8)r->idx, c->gen, slot);
+  sqe_recv(r, (int)slot, ud(OP_RECV, (u8)r->idx, c->gen, slot));
   c->recv_armed = 1;
 }
 static void submit_send(ring *r, u32 slot) {
   conn *c = &r->conns[slot];
   obuf *b = c->out_head;
-  struct io_uring_sqe *s = sqe_get(r);
-  s->opcode = IORING_OP_SEND;
-  s->fd = (int)slot;
-  s->flags = IOSQE_FIXED_FILE;
-  s->addr = (u64)(uintptr_t)b->data;
-  s->len = b->len;
-  s->msg_flags = MSG_NOSIGNAL | MSG_WAITALL;
-  s->user_data = ud(OP_SEND, (u8)r->idx, c->gen, slot);
+  sqe_send(r, (int)slot, (u64)(uintptr_t)b->data, b->len, ud(OP_SEND, (u8)r->idx, c->gen, slot));
   c->sending = 1;
 }
 /* Close: shut the socket down (ends the multishot receive), then release the slot. */
@@ -140,16 +152,10 @@ static void conn_close(ring *r, u32 slot) {
   if (c->state != C_OPEN) return;
   if (c->sending) { c->close_after = 1; return; }
   c->state = C_CLOSING;
-  struct io_uring_sqe *s = sqe_get(r);
-  s->opcode = IORING_OP_SHUTDOWN;
-  s->fd = (int)slot;
-  s->flags = IOSQE_FIXED_FILE | IOSQE_IO_HARDLINK | IOSQE_CQE_SKIP_SUCCESS;
-  s->len = SHUT_RDWR;
-  s->user_data = ud(OP_SHUTDOWN, (u8)r->idx, c->gen, slot);
-  s = sqe_get(r);
-  s->opcode = IORING_OP_CLOSE;
-  s->file_index = slot + 1;
-  s->user_data = ud(OP_CLOSE, (u8)r->idx, c->gen, slot);
+  /* Keep the linked shutdown/close pair in the same publication batch. */
+  sqe_ensure(r, 2);
+  sqe_shutdown(r, (int)slot, ud(OP_SHUTDOWN, (u8)r->idx, c->gen, slot));
+  sqe_close(r, slot + 1, ud(OP_CLOSE, (u8)r->idx, c->gen, slot));
 }
 static void conn_reset(conn *c) {
   free(fragment_of(c->in));
@@ -439,11 +445,7 @@ static void ring_init(ring *r, int idx, u32 slots, const char *host, int port) {
 }
 
 static void cancel_accept(ring *r) {
-  struct io_uring_sqe *s = sqe_get(r);
-  s->opcode = IORING_OP_ASYNC_CANCEL;
-  s->addr = ud(OP_ACCEPT, (u8)r->idx, 0, 0);
-  s->flags = IOSQE_CQE_SKIP_SUCCESS;
-  s->user_data = ud(OP_SHUTDOWN, (u8)r->idx, 0, 0);   /* completion ignored like a shutdown's */
+  sqe_cancel(r, ud(OP_ACCEPT, (u8)r->idx, 0, 0), ud(OP_SHUTDOWN, (u8)r->idx, 0, 0));
 }
 /* Keep exactly one ring accepting, on a ring with room: the emptiest open ring if it is at most
  * three quarters full, else a new ring. */
@@ -530,21 +532,6 @@ static void release_holds(void) {
 #ifndef COALESCE_JOBS
 #define COALESCE_JOBS 64    /* an iteration with at least this many requests does not wait */
 #endif
-#ifdef STATS
-static u64 st_iters, st_enters, st_cqes, st_jobs, st_sleeps, st_waits;
-static void stats_tick(void) {
-  static i64 last;
-  if (now_s - last < 10) return;
-  if (last) fprintf(stderr, "stats: iters %llu enters %llu cqes %llu jobs %llu sleeps %llu waits %llu | jobs/iter %.1f enters/job %.2f\n",
-                    st_iters, st_enters, st_cqes, st_jobs, st_sleeps, st_waits, st_iters ? (double)st_jobs / st_iters : 0,
-                    st_jobs ? (double)st_enters / st_jobs : 0);
-  last = now_s;
-  st_iters = st_enters = st_cqes = st_jobs = st_sleeps = st_waits = 0;
-}
-#define STAT(x) (x)
-#else
-#define STAT(x) ((void)0)
-#endif
 
 /* A ring needs an io_uring_enter if it has submissions, deferred completions waiting to run
  * (IORING_SQ_TASKRUN), CQEs not yet reaped, or its eventfd fired. */
@@ -565,12 +552,7 @@ static void transport_run(void) {
     for (int i = 0; i < nrings; i++) {
       ring *r = &rings[i];
       if (!ring_pending(r)) continue;
-      int rc;
-      do rc = sys_enter(r->fd, r->to_submit, 0, IORING_ENTER_GETEVENTS);
-      while (rc < 0 && errno == EINTR);
-      if (rc < 0) { perror("io_uring_enter"); exit(1); }
-      STAT(st_enters++);
-      r->to_submit -= (u32)rc;
+      (void)ring_enter(r);
       r->hot = 0;
       got += reap(r);
     }
@@ -608,7 +590,7 @@ static void transport_run(void) {
 #endif
       continue;
     }
-    for (int i = 0; i < nrings; i++) if (rings[i].to_submit) { ring_flush(&rings[i]); STAT(st_enters++); }
+    for (int i = 0; i < nrings; i++) if (rings[i].to_submit) { ring_flush(&rings[i]); }
     int n;
     do n = epoll_wait(epfd, evs, MAX_RINGS, -1);
     while (n < 0 && errno == EINTR);

@@ -21,3 +21,27 @@ Test SQ wraparound, forced small queues, saturation, short sends, cancellation, 
 ## Experiments
 
 No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+
+### Q1 design before measurement
+
+`Feed.Sqe.ReadyPlan op` contains typed references into the exact opcode argument context
+and proof that all required dynamic fields are assigned. It emits six specialized
+constructors: accept, recv, send, shutdown, fixed-file close and accept cancellation.
+The shared `Wire.Ref` system now includes signed fd, u32 and u64 machine domains.
+Constructors reserve/zero a slot, initialize constants and typed arguments, and only
+then commit to the private tail. Full 64-byte zeroing remains; removing it is not
+justified without a complete per-opcode kernel field model.
+
+`ring_enter` is the single publication boundary for both normal submission and capacity
+flushes. It release-stores the ready tail immediately before entry and subtracts only
+the returned submission count. Reserve uses acquire-loaded head and preserves unsigned
+wrap arithmetic. Shutdown reserves two slots before constructing its linked close,
+preventing an application-induced capacity flush from splitting that pair.
+
+The ABI ordering and link boundary follow the Linux manual:
+[io_uring_enter(2)](https://man7.org/linux/man-pages/man2/io_uring_enter.2.html).
+This is an explicit C/kernel trust boundary, not a Lean proof of kernel behavior.
+`sqe_cases.c` mocks only the syscall and tests actual production functions with tiny
+queues, unsigned tail wrap, interrupt retries, partial consumption, field zeroing and
+close-pair capacity. Real small-queue API/pipeline tests and mixed network measurements
+are required before keeping Q1.
