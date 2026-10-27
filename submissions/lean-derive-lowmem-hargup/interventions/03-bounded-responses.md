@@ -1,6 +1,6 @@
 # Response representations selected by proven bounds
 
-Status: first lowering implemented; awaiting benchmark. Source baseline: `100234f`.
+Status: R1 retained for bounded ownership and allocation reduction. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Test extreme integer widths, degraded health fallback, fragmented sends, pipelin
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Experiment R1: shape-derived inline ownership
 
@@ -52,3 +52,11 @@ create decode 4013.53 → 4156.19. Raw:
 `results/pair-93ab6eb-99730e2-longclaims-1793082657017962536`. The forced-inline
 claim specialization does not show a general decode speedup. Keep provisional pending
 end-to-end comparisons; final decisions must not cite these samples as a clear win.
+
+### Retained allocation tradeoff
+
+Keep R1 for the proved capacity selection, one allocation rather than two, and the
+health-path measurements. The separate inline free list can retain up to 2,048 ×
+224 bytes in addition to general pools. Per-response requested storage shrinks,
+but aggregate mixed-process retained/peak memory is workload-dependent; no overall
+memory reduction is claimed from the small mixed-traffic runs.

@@ -1,6 +1,6 @@
 # Phase-indexed incremental HTTP framing
 
-Status: planned. Source baseline: `100234f`.
+Status: H1 retained; fragmented parsing improves, ordinary traffic remains comparable. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Split requests at every delimiter and body boundary, pipeline next requests, tes
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### H1 implementation and validation design
 

@@ -1,6 +1,6 @@
 # Typed SQE construction and batch publication
 
-Status: planned. Source baseline: `100234f`.
+Status: Q1 retained; publication work reduced, standalone throughput gain unproven. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Test SQ wraparound, forced small queues, saturation, short sends, cancellation, 
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Q1 design before measurement
 

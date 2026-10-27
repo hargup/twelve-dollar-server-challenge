@@ -1,6 +1,6 @@
 # Shared typed specialization system
 
-Status: foundation implemented; optimized consumers in progress. Source baseline: `100234f`.
+Status: kept; shared types drive all retained lowerings. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Lean kernel checks, generator regeneration, official tests, and differential out
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Typed migration (2026-10-26)
 

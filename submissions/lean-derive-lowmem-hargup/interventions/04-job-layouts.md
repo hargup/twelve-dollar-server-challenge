@@ -1,6 +1,6 @@
 # Endpoint-specific payload layouts
 
-Status: planned. Source baseline: `100234f`.
+Status: J1/S1 retained as one representation change; no standalone CPU gain claimed. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Measure sizeof/layout, bytes initialized per read, mixed decode/batch CPU and pi
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Coupled J1/S1 design before implementation
 
@@ -62,3 +62,12 @@ The representation saves 40 bytes per hot job and removes classification passes;
 CPU results are mixed, with small decode overhead and no established mixed win.
 Keep provisional until paired network comparison; do not report post improvement
 as reliable given its large per-sample spread.
+
+### Retained representation decision
+
+Keep J1/S1 together. The common envelope reduction saves 40 bytes per job, or
+2.5 MiB of static job-array address space at MAX_JOBS=65,536. Cold post/like payloads
+use the existing batch arena; creation's 40-byte payload offsets the common-envelope
+saving for that endpoint. This is not a 40-byte saving per connection or a guarantee
+of the same RSS decrease. Mixed decode/batch measurements remain near parity/noisy;
+the justified benefit is exact storage and removal of redundant classification work.

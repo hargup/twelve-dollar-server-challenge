@@ -1,6 +1,6 @@
 # Specialized batch execution streams
 
-Status: planned. Source baseline: `100234f`.
+Status: J1/S1 retained; snapshot/order/rollback semantics tested. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Compare interleaved creates/likes/reads and failure responses with the existing 
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Coupled J1/S1 design before implementation
 
@@ -66,3 +66,11 @@ of that ID in the same batch sees the prior snapshot. An error hole does not ent
 any stream. A rejecting SQLite commit hook forces rollback: only write responses
 become 500, successful read responses survive, database state is unchanged, and a
 subsequent creation succeeds. Queue heads/tails and the payload arena reset correctly.
+
+### Final disposition
+
+Retain S1 with J1. Exact payloads and intrusive streams are one representation change;
+the queue link occupies existing envelope padding and adds no per-job storage.
+Keep the measured space/work reduction and tested ordering semantics, without an
+isolated S1 throughput claim. The complete retained candidate's paired HTTP result
+is reported in the index and is not attributed to this intervention alone.

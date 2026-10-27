@@ -1,6 +1,6 @@
 # Endpoint-specific authentication materialization
 
-Status: first lowering under test. Source baseline: `100234f`.
+Status: C3 retained; C1/C2 superseded. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Exercise escaped/Unicode names, missing/wrong-type claims, invalid signatures, e
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Experiment C1: materialization follows endpoint demand
 

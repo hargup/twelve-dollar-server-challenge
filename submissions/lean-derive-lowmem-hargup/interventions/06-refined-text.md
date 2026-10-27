@@ -1,6 +1,6 @@
 # Refined strings through parsing and serialization
 
-Status: planned. Source baseline: `100234f`.
+Status: T1 retained; global timestamp refinement not adopted. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Test ASCII, escapes, control characters, BMP/astral UTF-8, trim behavior, timest
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### T1 design and implementation
 

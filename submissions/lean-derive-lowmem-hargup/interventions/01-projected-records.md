@@ -1,6 +1,6 @@
 # Schema-projected SQLite record kernels
 
-Status: first lowering under test. Source baseline: `100234f`.
+Status: P3 retained; P1/P2 superseded; cursor lifetime fix retained. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -20,7 +20,7 @@ Compare native reads against SQL for 20,000 seeded posts and feeds, plus long/ov
 
 ## Experiments
 
-No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+Entries below record the candidate/control commits, checks, measurements and disposition. Full commit identities and collected artifacts are linked from the index. Coherent grouped changes are identified explicitly.
 
 ### Experiment P1: username projection
 
