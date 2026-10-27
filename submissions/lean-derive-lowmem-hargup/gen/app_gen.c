@@ -149,9 +149,9 @@ static void app_reset(void) {
   stream_health = stream_feed = stream_post = stream_writes = (job_stream){UINT32_MAX, 0};
   arena_used = 0;
 }
-static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, claims_t *c, int materialize_name) {
+static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, claims_t *c) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(NO_BEARER); return 0; }
-  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, c, materialize_name);
+  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, c);
   if (rc == JWT_INVALID) { j->resp = ERR(BAD_TOKEN); return 0; }
   if (rc == JWT_PAYLOAD) { j->resp = ERR(BAD_PAYLOAD); return 0; }
   return 1;
@@ -241,11 +241,11 @@ static void app_decode(const req_t *rq, job_t *j, u32 slot) {
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && s == e) {
       claims_t claims; const u8 *text; u32 text_len; u8 text_plain;
-      if (!authenticate(rq, j, &claims, 1)) return;
+      if (!authenticate(rq, j, &claims)) return;
       if (!decode_create(rq, j, &text, &text_len, &text_plain)) return;
       args_create *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
       a->uid = claims.uid;
-      u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;
+      u8 *name = arena_get(claims.raw_name_len); if (!name) { j->resp = ERR(INTERNAL); return; } a->name_len = claims.name_escaped ? json_unescape(claims.raw_name, claims.raw_name_len, name) : (memcpy(name, claims.raw_name, claims.raw_name_len), claims.raw_name_len); a->name = name;
       a->text = text; a->text_len = text_len; a->text_plain = text_plain;
       j->kind = K_CREATE; j->is_write = 1;
       stream_append(&stream_writes, j, slot);
@@ -257,7 +257,7 @@ static void app_decode(const req_t *rq, job_t *j, u32 slot) {
     (void)id_p; (void)id_n;
     if (path_lit(&s, e, "/posts", 6) && path_param(&s, e, &id_p, &id_n) && path_lit(&s, e, "/like", 5) && s == e) {
       i64 id; claims_t claims;
-      if (!authenticate(rq, j, &claims, 0)) return;
+      if (!authenticate(rq, j, &claims)) return;
       { int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(BAD_ID); return; } if (ok < 0) { j->resp = ERR(NO_POST); return; } }
       args_like *a = (void *)arena_get(sizeof *a); if (!a) { j->resp = ERR(INTERNAL); return; } j->payload = a;
       a->id = id;

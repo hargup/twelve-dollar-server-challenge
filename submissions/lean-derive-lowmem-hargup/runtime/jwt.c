@@ -106,11 +106,13 @@ enum { JWT_OK = 0, JWT_INVALID = 1, JWT_PAYLOAD = 2 };
 
 typedef struct {
   i64 uid;
-  u8 name[512]; u32 name_len;   /* decoded username, UTF-8 */
+  u8 decoded[2048];           /* verified JSON scratch, valid only during request decoding */
+  const u8 *raw_name; u32 raw_name_len;
+  u8 name_escaped;
 } claims_t;
 
 /* Verify "Bearer <jwt>" token bytes (without the "Bearer " prefix). */
-static inline __attribute__((always_inline)) int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c, int materialize_name) {
+static int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c) {
   const u8 *d1 = memchr(t, '.', n);
   if (!d1) return JWT_INVALID;
   const u8 *d2 = memchr(d1 + 1, '.', (size_t)(t + n - d1 - 1));
@@ -123,13 +125,13 @@ static inline __attribute__((always_inline)) int jwt_verify(const u8 *t, u32 n, 
   u8 diff = 0;
   for (int i = 0; i < 32; i++) diff |= (u8)(sig[i] ^ mac[i]);
   if (diff) return JWT_INVALID;
-  u8 buf[2048];
-  int hn = b64url_decode(t, hl, buf, sizeof buf);
+  u8 *buf = c->decoded;
+  int hn = b64url_decode(t, hl, buf, sizeof c->decoded);
   if (hn < 0) return JWT_INVALID;
   jmember hm[1] = {{"alg", 3, 0, 0, 0, 0}};
   if (json_members(buf, (u32)hn, hm, 1) != 0) return JWT_INVALID;
   if (hm[0].type != JT_STRING || hm[0].escaped || hm[0].v_len != 5 || memcmp(hm[0].v, "HS256", 5)) return JWT_INVALID;
-  int pn = b64url_decode(d1 + 1, pl, buf, sizeof buf);
+  int pn = b64url_decode(d1 + 1, pl, buf, sizeof c->decoded);
   if (pn < 0) return JWT_INVALID;
   jmember pm[3] = {{"exp", 3, 0, 0, 0, 0}, {"sub", 3, 0, 0, 0, 0}, {"username", 8, 0, 0, 0, 0}};
   if (json_members(buf, (u32)pn, pm, 3) != 0) return JWT_INVALID;
@@ -158,11 +160,8 @@ static inline __attribute__((always_inline)) int jwt_verify(const u8 *t, u32 n, 
     uid = uid * 10 + (ch - '0');
   }
   if (uid <= 0) return JWT_PAYLOAD;
-  if (pm[2].type != JT_STRING || pm[2].v_len > sizeof c->name) return JWT_PAYLOAD;
+  if (pm[2].type != JT_STRING || pm[2].v_len > 512) return JWT_PAYLOAD;
   c->uid = uid;
-  if (materialize_name) {
-    if (pm[2].escaped) c->name_len = json_unescape(pm[2].v, pm[2].v_len, c->name);
-    else { memcpy(c->name, pm[2].v, pm[2].v_len); c->name_len = pm[2].v_len; }
-  }
+  c->raw_name = pm[2].v; c->raw_name_len = pm[2].v_len; c->name_escaped = pm[2].escaped;
   return JWT_OK;
 }

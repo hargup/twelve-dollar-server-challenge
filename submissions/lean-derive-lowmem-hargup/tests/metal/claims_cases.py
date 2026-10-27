@@ -18,6 +18,8 @@ cases=[('username missing',{'sub':'1','exp':base['exp']},'invalid token payload'
        ('username wrong type',dict(base,username=123),'invalid token payload'),
        ('sub wrong type',dict(base,sub=1),'invalid token payload'),
        ('sub invalid',dict(base,sub='abc'),'invalid token payload'),
+       ('username raw limit',dict(base,username='x'*513),'invalid token payload'),
+       ('escaped raw limit',dict(base,username='漢'*100),'invalid token payload'),
        ('expired',dict(base,exp=0),'invalid or expired token')]
 for label,payload,error in cases:
     for path,body in [('/posts/1/like',None),('/posts',{'body':'claim check'})]:
@@ -30,4 +32,8 @@ status,value=call('/posts',jwt(base),{'body':'claim projection keeps the creatio
 assert status==201 and value['post']['author']==base['username'],(status,value)
 status,value=call('/posts/1/like',jwt(base))
 assert status in (200,201) and value['liked'] is True
+for name in ['', 'x'*512, '"\\'*120]:
+    payload=dict(base,username=name)
+    status,value=call('/posts',jwt(payload),{'body':'direct claim ownership'})
+    assert status==201 and value['post']['author']==name
 print('claim cases: validation/error order and escaped creation username passed')

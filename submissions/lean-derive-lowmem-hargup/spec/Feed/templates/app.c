@@ -127,9 +127,9 @@ static void app_reset(void) {
   stream_health = stream_feed = stream_post = stream_writes = (job_stream){UINT32_MAX, 0};
   arena_used = 0;
 }
-static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, claims_t *c, int materialize_name) {
+static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, claims_t *c) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(@{ERR_NO_BEARER}); return 0; }
-  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, c, materialize_name);
+  int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, c);
   if (rc == JWT_INVALID) { j->resp = ERR(@{ERR_BAD_TOKEN}); return 0; }
   if (rc == JWT_PAYLOAD) { j->resp = ERR(@{ERR_BAD_PAYLOAD}); return 0; }
   return 1;

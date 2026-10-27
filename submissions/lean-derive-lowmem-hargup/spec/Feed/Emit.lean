@@ -196,8 +196,8 @@ def jobGen : String :=
   "\ntypedef struct job {\n  u8 kind, is_write, close_after;\n  u32 conn, gen, next;\n  void *payload;\n  obuf *resp;\n} job_t;\n" ++
   "_Static_assert(sizeof(job_t) == 32, \"compact job envelope\");\n"
 
-def emitCheck (e : Endpoint) : Check → String
-  | .auth => s!"if (!authenticate(rq, j, &claims, {if e.needsName then 1 else 0})) return;"
+def emitCheck (_e : Endpoint) : Check → String
+  | .auth => "if (!authenticate(rq, j, &claims)) return;"
   | .postId => "{ int ok = parse_id(id_p, id_n, &id); if (ok == 0) { j->resp = ERR(" ++ badId.name ++
       "); return; } if (ok < 0) { j->resp = ERR(" ++ noPost.name ++ "); return; } }"
   | .createBody => "if (!decode_create(rq, j, &text, &text_len, &text_plain)) return;"
@@ -206,7 +206,7 @@ def constructArg : Arg → String
   | .postId => "a->id = id;"
   | .userId => "a->uid = claims.uid;"
   | .body => "a->text = text; a->text_len = text_len; a->text_plain = text_plain;"
-  | .username => "u8 *name = arena_get(claims.name_len); if (!name) { j->resp = ERR(INTERNAL); return; } memcpy(name, claims.name, claims.name_len); a->name = name; a->name_len = claims.name_len;"
+  | .username => "u8 *name = arena_get(claims.raw_name_len); if (!name) { j->resp = ERR(INTERNAL); return; } a->name_len = claims.name_escaped ? json_unescape(claims.raw_name, claims.raw_name_len, name) : (memcpy(name, claims.raw_name, claims.raw_name_len), claims.raw_name_len); a->name = name;"
 
 def emitRoute (r : Route) : String :=
   let cond := " && ".intercalate (r.path.map emitSeg ++ ["s == e"])

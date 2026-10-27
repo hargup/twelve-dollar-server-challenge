@@ -58,3 +58,16 @@ create decode 4013.53 → 4156.19. Raw:
 `results/pair-93ab6eb-99730e2-longclaims-1793082657017962536`. The forced-inline
 claim specialization does not show a general decode speedup. Keep provisional pending
 end-to-end comparisons; final decisions must not cite these samples as a clear win.
+
+### C3 design: shared verification, demand-driven ownership
+
+C2 forced a large verifier into two route branches and did not show a reliable overall
+decode gain. Replace it with one common verifier that returns uid plus a borrowed span
+into caller-owned verified JSON scratch. The raw username remains validated on every
+route with the same 512-byte limit and error precedence. `Endpoint.payload` generates
+materialization only when constructing a username field: creation copies/unescapes
+directly into its final arena allocation, after body validation; likes never construct it.
+There is no runtime materialization flag and no intermediate decoded-name copy.
+The borrowed span cannot leave request decoding; only the owned arena span enters a job.
+Benchmark short and long escaped claims against C2, check generated assembly for the
+shared verifier and unchanged full validation, then retain/reject based on measurements.
