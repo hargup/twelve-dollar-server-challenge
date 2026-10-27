@@ -1,8 +1,20 @@
 # Lean → C: a derived feed server (lower-memory variant)
 
-This is the same server as `lean-derive-hargup`, from the same Lean specification and with the
-same proofs, tuned to keep less memory resident:
+This variant keeps the proved read plans and derives concrete C representations from typed
+endpoint demand, wire shapes, parser phases and kernel-operation descriptions. The current
+optimization experiments and decisions are in [interventions/index.md](interventions/index.md).
 
+* **Exact jobs.** A 32-byte transport envelope replaces the 72-byte all-endpoint job. Feed and
+  health have no payload; post, like and create carry only their consumed fields. Construction
+  links homogeneous read queues and one ordered write queue, removing batch classification scans.
+* **Bounded responses.** Shape-derived bounds select one 224-byte allocation for health/like
+  responses, instead of a 32-byte descriptor plus a 1 KiB block. General responses still grow.
+* **Refined text.** Validated unescaped creation bodies retain that fact through trimming and
+  use a generated quoted-copy serializer. Stored strings retain general JSON escaping.
+* **Incremental framing.** Partial requests retain a search frontier or validated body-wait
+  offsets in their fragment allocation. Idle connections gain no fields or retained buffers.
+* **Ready SQEs.** Typed opcode constructors initialize entries before advancing a private tail;
+  the shared tail is published at kernel entry. Linked shutdown/close pairs reserve room together.
 * **Rings on demand.** io_uring rings are opened on demand behind one shared listener: one ring
   accepts at a time and hands over before its table of direct descriptors fills. 300k
   connections need 5 rings instead of 10, so there are fewer ring buffers and fewer
@@ -10,11 +22,12 @@ same proofs, tuned to keep less memory resident:
 * **Receive buffers.** 512 per ring instead of 1,024.
 * **Partial requests.** A connection's input buffer is released once its buffered requests
   have been parsed, rather than retained for the rest of an idle keep-alive connection.
-* **Response buffers.** Two size classes, 1 KiB and 8 KiB. The generator picks the class from
+* **Response buffers.** General size classes of 1 KiB and 8 KiB, plus the bounded inline class. The generator picks the class from
   each response's JSON shape (a list of rows starts big). Free lists are capped, so bursts do
   not stay resident.
 * **Cursor storage.** Three reusable cursor objects replace allocations on every batch. Each
-  batch still opens fresh SQLite cursors and closes them before committing.
+  batch still opens fresh SQLite cursors and closes them before committing. Each cursor owns its
+  overflow-record scratch, so cross-table reads cannot overwrite live record fields.
 * **SQLite page cache.** 1 MiB instead of 4 MiB; reads come from the mmap.
 * **Checkpoints off the request path.** WAL checkpoints (copying the log into the database and
   fsyncing it) run on their own thread and SQLite connection, so a slow disk can no longer stall
@@ -48,18 +61,23 @@ serialization and even query execution are specialized to it.
 
 `spec/` is a Lean package with no dependencies beyond Lean's core library.
 
-| Lean (`spec/Feed/…`) | What it contains | What it becomes in `gen/app_gen.c` |
+| Lean (`spec/Feed/…`) | What it contains | Generated lowering |
 |---|---|---|
 | `Model.lean` | users, posts, likes; `feed`, `getPost`, `newPost`, `like` as plain functions | the meaning of every endpoint; also the test oracle |
 | `Invariant.lean` | `Db.Inv`, the startup check `checkInv`, the post-insert check `insertOk` | `app_check_inv`, the check after `INSERT … RETURNING` |
 | `Plan.lean` | `feedPlan`, `postPlan` over B-tree primitives (tail scan, rowid seek, one index range scan) | `feed_tail`, `post_by_id`, `range_counts`, `user_name` |
 | `Contract.lean` | routes, check order, statuses, error messages, JSON shapes | route matcher; every error response as complete constant bytes (Content-Length computed in Lean); serializers with all constant JSON merged |
 | `Schema.lean` | `schema.sql` as data | record field positions and type checks; SQL text; a startup check of `PRAGMA table_info` |
-| `Emit.lean` | the generator | `app_gen.c` (filled into `Feed/templates/app.c`) |
+| `Wire.lean` | type/context-indexed references, machine domains, plain-text refinement | exact arguments and specialized serializer selection |
+| `Bounds.lean` | shape-derived body bounds and inline-capacity evidence | bounded response allocation and C size assertions |
+| `Frame.lean` | phase-indexed field layouts | `frame_gen.h`: cold pointer-free framing states and save/restore helpers |
+| `Sqe.lean` | opcode contexts and complete typed assignment plans | `sqe_gen.h`: specialized ready-entry constructors |
+| `Emit.lean` | the application emitter | `app_gen.c` (from `Feed/templates/app.c`) and `job_gen.h` |
 
-`build.sh` regenerates `app_gen.c` and refuses to build if it differs from the checked-in
-`gen/app_gen.c`. The checked-in copy is there to be read; the compiled one always comes from
-the specification.
+`build.sh` regenerates all four files and refuses to build if any differs from its checked-in
+`gen/` copy. Compilation uses the freshly derived files. Lean checks membership, type,
+capacity and assignment-completeness facts; C memory ownership, parser refinement boundaries
+and the Linux/SQLite ABIs remain tested trust boundaries, not full C verification.
 
 ### The invariant, and what it buys
 

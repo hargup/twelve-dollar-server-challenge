@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the server as a normal user:
 #   1. Lean checks the specification (spec/) — its theorems are verified by the kernel — and
-#      generates the application layer (gen/app_gen.c). The build stops if the checked-in copy
+#      generates the application layer and its job/framing/SQE headers. The build stops if a checked-in copy
 #      differs from what the specification generates.
 #   2. The C compiler builds one translation unit: SQLite (pinned, checksummed), the runtime,
 #      and the generated code.
@@ -22,7 +22,7 @@ echo "== lean: check the specification and derive the application layer"
 (cd spec && "$LEAN/lake" build && "$LEAN/lake" exe derive ../build)
 for generated in app_gen.c job_gen.h frame_gen.h sqe_gen.h; do
 if ! cmp -s "build/$generated" "gen/$generated"; then
-  echo "gen/app_gen.c is not what spec/ generates; run: (cd spec && lake exe derive ../gen)"
+  echo "gen/$generated is not what spec/ generates; run: (cd spec && lake exe derive ../gen)"
   diff -u "gen/$generated" "build/$generated" | head -40
   exit 1
 fi

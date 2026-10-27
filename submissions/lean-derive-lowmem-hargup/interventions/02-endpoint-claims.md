@@ -71,3 +71,18 @@ There is no runtime materialization flag and no intermediate decoded-name copy.
 The borrowed span cannot leave request decoding; only the owned arena span enters a job.
 Benchmark short and long escaped claims against C2, check generated assembly for the
 shared verifier and unchanged full validation, then retain/reject based on measurements.
+
+### C3 results and decision (`2eae17a` versus `1ec22ff`)
+
+Full API/SQL/edge/claim validation passes, including empty and 512-byte usernames,
+escaped Unicode, raw-size limits, invalid signatures and auth-before-ID errors.
+Interleaved medians ns/request: ordinary like decode 1275.16 → 1259.07, create
+1306.59 → 1281.44; long escaped claims like 4008.84 → 3915.81, create
+4165.42 → 4017.27. These are modest 1–4% targeted changes, not a mixed-throughput
+claim. No loadgen/compiler overlap was observed. Raw:
+`results/pair-1ec22ff-2eae17a-1793084417399249220` and
+`results/pair-1ec22ff-2eae17a-longclaims-1793084448234063558`.
+
+Keep C3. It removes the materialization flag and intermediate decoded-name buffer,
+avoids duplicating verification, and shows a small benefit on both measured claim
+fixtures. C1/C2 lowerings are superseded; their results remain recorded above.

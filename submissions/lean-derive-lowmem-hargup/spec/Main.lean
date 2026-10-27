@@ -2,7 +2,7 @@ import Feed.Emit
 import Feed.Frame
 import Feed.Sqe
 
-/-- `lake exe derive <dir>`: write the generated application layer to `<dir>/app_gen.c`. -/
+/-- `lake exe derive <dir>`: write the application and its job/framing/SQE headers. -/
 def main (args : List String) : IO UInt32 := do
   let dir := args.headD "gen"
   IO.FS.createDirAll dir

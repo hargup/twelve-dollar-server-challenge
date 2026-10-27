@@ -57,3 +57,12 @@ The representation saves 40 bytes per hot job and removes classification passes;
 CPU results are mixed, with small decode overhead and no established mixed win.
 Keep provisional until paired network comparison; do not report post improvement
 as reliable given its large per-sample spread.
+
+### Transaction semantics regression
+
+`1ec22ff-batch` runs the actual generated decoders/executors under ASAN/UBSAN as
+UID 65534. A create followed by a like of the new ID executes in order, while a read
+of that ID in the same batch sees the prior snapshot. An error hole does not enter
+any stream. A rejecting SQLite commit hook forces rollback: only write responses
+become 500, successful read responses survive, database state is unchanged, and a
+subsequent creation succeeds. Queue heads/tails and the payload arena reset correctly.

@@ -60,3 +60,20 @@ Twenty-second mixed HTTP ABBA: control 175,112 / 181,945 req/s; candidate
 ~1.5% lower with overlapping spread). The intended benefit is fewer shared-tail
 publications and complete construction before visibility; collect STATS publication
 counts plus real tiny-queue/high-connection checks before final disposition.
+
+### Real kernel and publication diagnostics
+
+`1ec22ff-small` (same production C as `5a536b3`, `-DSQ_ENTRIES=4`) passes all
+42 API tests, 20,000 SQL-oracle post checks plus feed, fragmentation/pipelines and
+claims under UID 65534. Raw: `results/1ec22ff-small-check-1793084159115816100`.
+`1ec22ff-batch` passes the actual generated queue and forced-COMMIT rollback/reuse
+test under ASAN/UBSAN as UID 65534.
+
+The diagnostic STATS build during mixed traffic recorded 1,574,907 initialized SQEs
+and 12,368 shared-tail publications in one reporting interval (about 127 SQEs per
+publication, 99.2% fewer tail stores than per-entry publication). It recorded 12,379
+entries and 1,574,776 jobs. Raw server log:
+`results/1ec22ff-stats-blast-1793084190665757759/server.log`. This demonstrates the
+intended work reduction, while the non-instrumented throughput comparison remains
+inconclusive. Keep Q1 for the measured publication reduction and construction/order
+fix; do not claim an end-to-end speedup from it.
