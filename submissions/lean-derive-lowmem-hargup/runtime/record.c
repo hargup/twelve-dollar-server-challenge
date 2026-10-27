@@ -36,26 +36,6 @@ static inline int rec_cols(const rec_t *r, int ncol, col_t *c) {
   }
   return body <= end ? 0 : -1;
 }
-/* Project one field without constructing a column array or reading trailing serial types.
- * The generated ordinal is schema-indexed; serial types/lengths remain checked here. */
-static inline int rec_field(const rec_t *r, u32 ordinal, col_t *c) {
-  const u8 *end = r->p + r->n;
-  u64 hsz;
-  const u8 *h = rd_varint(r->p, end, &hsz);
-  if (!h || hsz > r->n || hsz < (u64)(h - r->p)) return -1;
-  const u8 *hend = r->p + hsz;
-  u64 off = hsz;
-  for (u32 i = 0; i <= ordinal; i++) {
-    u64 t;
-    h = rd_varint(h, hend, &t);
-    if (!h || t > 2ull * UINT32_MAX + 13ull) return -1;
-    u32 len = serial_len(t);
-    if (off > r->n || len > r->n - off) return -1;
-    if (i == ordinal) { c->t = t; c->p = r->p + off; return 0; }
-    off += len;
-  }
-  return -1;
-}
 static inline int col_is_int(const col_t *c) { return (c->t >= 1 && c->t <= 6) || c->t == 8 || c->t == 9; }
 static inline int col_is_text(const col_t *c) { return c->t >= 13 && (c->t & 1); }
 static inline u32 col_len(const col_t *c) { return serial_len(c->t); }
@@ -71,22 +51,4 @@ static inline i64 col_int(const col_t *c) {
   case 9: return 1;
   default: return 0;
   }
-}
-
-/* A schema-selected text projection immediately after an INTEGER PRIMARY KEY alias.
- * The common encoding has one-byte header length and serial type. Guards establish that
- * encoding on this record; long headers/types take the general checked decoder. */
-static inline int rec_text_after_rowid(const rec_t *r, const u8 **text, u32 *len) {
-  const u8 *p = r->p;
-  if (r->n >= 3 && p[0] >= 3 && p[0] < 128 && p[1] == 0 &&
-      p[2] >= 13 && p[2] < 128 && (p[2] & 1)) {
-    u32 off = p[0], n = (p[2] - 13u) >> 1;
-    if (off > r->n || n > r->n - off) return -1;
-    *text = p + off; *len = n;
-    return 0;
-  }
-  col_t c;
-  if (rec_field(r, 1, &c) || !col_is_text(&c)) return -1;
-  *text = c.p; *len = col_len(&c);
-  return 0;
 }

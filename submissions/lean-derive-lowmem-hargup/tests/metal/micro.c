@@ -10,18 +10,19 @@ int main(int argc,char **argv) {
   db_open(getenv("SQLITE_PATH")); app_init(); app_check_inv();
   const char *key="twelve-dollar-challenge"; hmac_init((const u8*)key,strlen(key)); now_s=time(0);
   int decode=!strncmp(kind,"decode-",7);
+  int authed=decode||!strcmp(kind,"like")||!strcmp(kind,"create");
   char paths[1024][48]; req_t rq[1024];
   const char *auth=getenv("BENCH_AUTH"); if(!auth)auth="";
   const char *body="{\"body\":\"typed code says hello\"}";
   for(int i=0;i<1024;i++) {
     const char *path;
     if(!strcmp(kind,"health")) path="/health";
-    else if(!strcmp(kind,"decode-create")) path="/posts";
-    else if(!strcmp(kind,"decode-like")) { snprintf(paths[i],sizeof paths[i],"/posts/%d/like",499000+i%1000); path=paths[i]; }
+    else if((!strcmp(kind,"decode-create")||!strcmp(kind,"create"))) path="/posts";
+    else if((!strcmp(kind,"decode-like")||!strcmp(kind,"like"))) { snprintf(paths[i],sizeof paths[i],"/posts/%d/like",499000+i%1000); path=paths[i]; }
     else if(!strcmp(kind,"post")||(!strcmp(kind,"mixed")&&(i&1))) { snprintf(paths[i],sizeof paths[i],"/posts/%d",499000+i%1000); path=paths[i]; }
     else path="/feed";
-    rq[i]=(req_t){.method=decode?M_POST:M_GET,.path=(const u8*)path,.path_len=(u32)strlen(path),
-      .auth=(const u8*)auth,.auth_len=(u32)strlen(auth),.has_auth=decode,.body=(const u8*)body,.body_len=(u32)strlen(body)};
+    rq[i]=(req_t){.method=authed?M_POST:M_GET,.path=(const u8*)path,.path_len=(u32)strlen(path),
+      .auth=(const u8*)auth,.auth_len=(u32)strlen(auth),.has_auth=authed,.body=(const u8*)body,.body_len=(u32)strlen(body)};
   }
   job_t js[128]; u64 start=0,checksum=0;
   for(int r=-100;r<rounds;r++) {

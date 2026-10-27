@@ -110,7 +110,7 @@ typedef struct {
 } claims_t;
 
 /* Verify "Bearer <jwt>" token bytes (without the "Bearer " prefix). */
-static int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c, int materialize_name) {
+static inline __attribute__((always_inline)) int jwt_verify(const u8 *t, u32 n, i64 now, claims_t *c, int materialize_name) {
   const u8 *d1 = memchr(t, '.', n);
   if (!d1) return JWT_INVALID;
   const u8 *d2 = memchr(d1 + 1, '.', (size_t)(t + n - d1 - 1));

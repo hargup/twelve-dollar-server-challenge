@@ -47,3 +47,19 @@ encoding. The pure record codec was separated for direct sanitizer testing: 20,0
 valid/random records and truncated prefixes passed ASAN/UBSAN. This experiment shares a
 commit with endpoint claim specialization; read-only microbenchmarks isolate the projection,
 authentication microbenchmarks isolate claims, and mixed HTTP measures the combination.
+
+P2/C1 source `e735916`, control `93ab6eb`: all correctness checks passed, including new
+claim cases. Medians (ns/request): feed 8028.47 → 8083.09; mixed batch 32: 3155.58 →
+3148.98; post 3309.80 → 3258.39. These do not establish an application-CPU gain. Mixed
+HTTP ABBA runs were 174619, 182628, 179514, 176689 requests/s (about +3.1% for the
+combination), all zero errors. Raw micro data: `pair-93ab6eb-e735916-1793082008107683415`;
+HTTP summaries have timestamp suffixes 1793082188847693270 through 1793082223373738941.
+Keep this as a promising control executable, not proof of an isolated projection speedup.
+
+### Experiment P3: simpler prefix derived from membership
+
+Replace the custom physical-encoding helper with the existing decoder instantiated at
+`usersName.prefix = 2`, with a two-element array. `Field.prefix_le` proves that this is a
+valid prefix of the schema. This directly removes the unused trailing field, adds no new
+runtime parser and reduces code complexity. Shares a commit with C2 and R1; compare the
+combined lowering with P2/C1. Sanitizer checks cover 20,000 valid records and truncations.

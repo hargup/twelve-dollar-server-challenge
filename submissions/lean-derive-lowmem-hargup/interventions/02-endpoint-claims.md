@@ -30,3 +30,15 @@ The like path skips username unescaping and both copies. The creation path is un
 Additional tests cover missing/wrong claims, escaped Unicode usernames, signature/algorithm/
 expiration failures, and auth-before-id behavior. This shares a commit with P2 record decoding;
 benchmark each affected path and the combination.
+
+C1 source `e735916` passed official, edge, SQL and claim checks. Seed-token decode CPU
+medians: like 1235.01 → 1225.88 ns; create 1325.18 → 1307.83 ns, within noise. The
+combined mixed-HTTP result was about +3.1% (see P2). Assembly retained a single
+`authenticate.isra.0`, so the demand flag was not fully erased.
+
+### Experiment C2: force constant specialization
+
+Inline the verifier and authentication wrapper at the generated constant call sites. The
+like and create paths now have the opportunity to eliminate unused materialization at
+compile time. Measure ordinary and long escaped claim fixtures; the latter tests the work
+this optimization actually removes. Shares the P3/R1 commit.

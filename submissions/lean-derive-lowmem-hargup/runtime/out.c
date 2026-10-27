@@ -10,10 +10,14 @@
  * own allocation. Freed blocks are kept on capped free lists, so a burst of responses does not
  * stay resident. Static (generated) responses are sent from read-only memory without copying. */
 
+#define OUT_INLINE 192
 #define OUT_SMALL 1024
 #define OUT_BIG 8192
 
 static obuf *obuf_free_list;
+typedef struct { obuf b; u8 bytes[OUT_INLINE]; } inline_obuf;
+static obuf *inline_free_list;
+static u32 inline_free_count;
 typedef struct { u8 *head; u32 count, cap; } block_pool;
 static block_pool pool_small = {0, 0, 2048}, pool_big = {0, 0, 256};
 static inline block_pool *pool_of(u32 size) { return size == OUT_SMALL ? &pool_small : size == OUT_BIG ? &pool_big : 0; }
@@ -46,11 +50,24 @@ static obuf *obuf_static(const u8 *data, u32 len) {
   return b;
 }
 static void obuf_release(obuf *b) {
+  if (b->cap == OUT_INLINE) {
+    if (inline_free_count == 2048) { free(b); return; }
+    b->next = inline_free_list; inline_free_list = b; inline_free_count++;
+    return;
+  }
   if (b->cap) block_put(b->mem, b->cap);
   b->next = obuf_free_list;
   obuf_free_list = b;
 }
 
+/* Bounds-derived small responses own their bytes in the send-queue node. */
+static inline void out_begin_inline(out_t *o) {
+  obuf *b = inline_free_list;
+  if (b) { inline_free_list = b->next; inline_free_count--; }
+  else if (!(b = malloc(sizeof(inline_obuf)))) abort();
+  b->next = 0; b->mem = ((inline_obuf *)b)->bytes; b->cap = OUT_INLINE;
+  o->b = b; o->start = o->p = b->mem + HDR_ROOM; o->end = b->mem + OUT_INLINE;
+}
 static inline void out_begin(out_t *o, u32 size) {
   obuf *b = o->b = obuf_get();
   b->mem = block_get(size);
@@ -66,7 +83,11 @@ static void out_grow(out_t *o, u32 n) {
   u8 *m = malloc(HDR_ROOM + want);
   if (!m) abort();
   memcpy(m + HDR_ROOM, o->start, used);
-  block_put(o->b->mem, o->b->cap);
+  if (o->b->cap == OUT_INLINE) {
+    /* No queue can reference a response before out_finish; replace the whole node. */
+    obuf_release(o->b);
+    o->b = obuf_get();
+  } else block_put(o->b->mem, o->b->cap);
   o->b->mem = m;
   o->b->cap = HDR_ROOM + want;
   o->start = m + HDR_ROOM;
@@ -85,8 +106,9 @@ static inline u32 fmt_u64(u8 *d, u64 v) {
   return n;
 }
 static inline void out_i64(out_t *o, i64 v) {
-  if (v < 0) { *o->p++ = '-'; v = -v; }
-  o->p += fmt_u64(o->p, (u64)v);
+  u64 magnitude = (u64)v;
+  if (v < 0) { *o->p++ = '-'; magnitude = 0u - magnitude; }
+  o->p += fmt_u64(o->p, magnitude);
 }
 /* JSON string: escapes '"', '\\' and control characters; UTF-8 passes through unchanged.
  * Needs room for 6*n + 2 bytes (+16 for the vector stores). */

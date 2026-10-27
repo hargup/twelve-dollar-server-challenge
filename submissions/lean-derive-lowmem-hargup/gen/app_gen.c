@@ -137,7 +137,7 @@ static u8 *arena_get(u32 n) {
   return p;
 }
 
-static inline int authenticate(const req_t *rq, job_t *j, int materialize_name) {
+static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, int materialize_name) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(NO_BEARER); return 0; }
   claims_t c;
   int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, &c, materialize_name);
@@ -270,7 +270,9 @@ static int user_name(i64 uid, const u8 **author, u32 *author_len) {
   if (rc) return rc;
   rec_t r;
   if (cur_record(&C_users, &r)) return -1;
-  if (rec_text_after_rowid(&r, author, author_len)) return -1;
+  col_t c[2];
+  if (rec_cols(&r, 2, c) || !col_is_text(&c[1])) return -1;
+  *author = c[1].p; *author_len = col_len(&c[1]);
   return 0;
 }
 /* Feed.Db.rangeCounts: like counts for post ids lo..hi from one scan of likes_post_id_idx */
@@ -408,10 +410,12 @@ static void exec_read(job_t *j) {
     j->resp = out_finish(o, HDR_200, sizeof HDR_200 - 1);
     return;
   case K_HEALTH:
-    out_begin(o, OUT_SMALL);
     rc = sqlite3_step(Q_health);
     sqlite3_reset(Q_health);
     if (rc == SQLITE_ROW) {
+      _Static_assert(OUT_INLINE == 192 && HDR_ROOM == 96, "wire capacity contract");
+  _Static_assert(HDR_ROOM + 57 <= OUT_INLINE, "bounded response fits");
+  out_begin_inline(o);
       i64 uptime = now_s - started_at;
       out_need(o, 57);
   out_lit(o, "{\"status\":\"ok\",\"db\":\"ok\",\"uptime_s\":", 36);
@@ -419,6 +423,7 @@ static void exec_read(job_t *j) {
   out_lit(o, "}", 1);
       j->resp = out_finish(o, HDR_200, sizeof HDR_200 - 1);
     } else {
+      out_begin(o, OUT_SMALL);
       const u8 *msg = (const u8 *)sqlite3_errmsg(db);
       u32 msg_len = (u32)strlen((const char *)msg);
       out_need(o, 49 + JSTR_ROOM(msg_len));
@@ -447,7 +452,9 @@ static void exec_write(job_t *j) {
     if (rc != SQLITE_DONE) { j->resp = ERR(INTERNAL); return; }
     int already = sqlite3_changes(db) != 1;
     i64 id = j->id;
-    out_begin(o, OUT_SMALL);
+    _Static_assert(OUT_INLINE == 192 && HDR_ROOM == 96, "wire capacity contract");
+  _Static_assert(HDR_ROOM + 67 <= OUT_INLINE, "bounded response fits");
+  out_begin_inline(o);
     out_need(o, 67);
   out_lit(o, "{\"liked\":true,\"already_liked\":", 30);
   if (already) out_lit(o, "true", 4); else out_lit(o, "false", 5);

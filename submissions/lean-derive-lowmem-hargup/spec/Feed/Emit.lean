@@ -1,4 +1,5 @@
 import Feed.Contract
+import Feed.Bounds
 import Feed.Schema
 import Feed.Plan
 
@@ -103,6 +104,12 @@ def emitAround (s : Shape ctx) : String × String :=
 
 def emitWhole (s : Shape ctx) : String := (emitAround s).1
 
+/-- The proof-bearing shape selects inline ownership; C assertions tie its arithmetic
+constants to the runtime's actual allocation/header sizes. -/
+def boundedBegin (b : Bounded s inlineCapacity) : String :=
+  s!"_Static_assert(OUT_INLINE == {inlineCapacity} && HDR_ROOM == 96, \"wire capacity contract\");\n  " ++
+  s!"_Static_assert(HDR_ROOM + {b.body} <= OUT_INLINE, \"bounded response fits\");\n  out_begin_inline(o);"
+
 /-! ## Constant responses -/
 
 def errIdent (e : ErrorCase) : String := "E_" ++ e.name
@@ -132,13 +139,9 @@ def colCheck {t : Table} {ty : Schema.Ty} (f : Field t ty) : String :=
 
 def col (f : Field t ty) : String := s!"c[{f.index.val}]"
 
-/-- Select the kernel from the field's position and preceding rowid alias. Runtime guards
-establish the one-byte encoding; schema membership never substitutes for stored-data checks. -/
+/-- The field's membership proof determines the exact required prefix and array size. -/
 def textProjection (f : Field t .text) : String :=
-  if f.index.val == 1 && (t.cols.head?).any (·.rowid) then
-    "if (rec_text_after_rowid(&r, author, author_len)) return -1;"
-  else
-    s!"col_t name; if (rec_field(&r, {f.index.val}, &name) || !col_is_text(&name)) return -1;\n  *author = name.p; *author_len = col_len(&name);"
+  s!"col_t c[{f.prefix}];\n  if (rec_cols(&r, {f.prefix}, c) || !col_is_text(&c[{f.index.val}])) return -1;\n  *author = c[{f.index.val}].p; *author_len = col_len(&c[{f.index.val}]);"
 
 /-- Startup check that the stored tables have exactly the derived layout. -/
 def emitSchemaCheck : String :=
@@ -235,6 +238,8 @@ def appGen : String :=
     ("FEED_AFTER", feedAfter),
     ("POST_BEFORE", postBefore),
     ("POST_AFTER", postAfter),
+    ("LIKE_BEGIN", boundedBegin likeBound),
+    ("HEALTH_BEGIN", boundedBegin healthBound),
     ("LIKE_BODY", emitWhole likeShape),
     ("HEALTH_BODY", emitWhole healthShape),
     ("DEGRADED_BODY", emitWhole degradedShape),

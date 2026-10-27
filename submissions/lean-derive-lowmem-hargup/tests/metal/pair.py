@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Interleaved thread-CPU measurements of SHA-keyed executables; one source tree."""
-import json, os, pathlib, shutil, subprocess, sys, time, statistics
+import json, os, pathlib, shutil, subprocess, sys, time, statistics, base64, hashlib, hmac
 root=pathlib.Path('/root/twelve/opt-audit-1024/metal')
 a,b=sys.argv[1:3]
-cases=sys.argv[3:] or ['mixed:1:300000','mixed:32:30000','post:1:400000']
-out=root/'results'/f'pair-{a[:8]}-{b[:8]}-{time.time_ns()}'
+long_claims='--long-claims' in sys.argv[3:]
+cases=[x for x in sys.argv[3:] if x != '--long-claims'] or ['mixed:1:300000','mixed:32:30000','post:1:400000']
+out=root/'results'/f'pair-{a[:8]}-{b[:8]}-{"longclaims-" if long_claims else ""}{time.time_ns()}'
 out.mkdir(parents=True)
 db=out/'feed.db'
 shutil.copyfile('/root/twelve/challenge/seed/feed.db',db)
 tokens=json.loads(pathlib.Path('/root/twelve/challenge/seed/tokens.json').read_text())
-env=dict(os.environ,SQLITE_PATH=str(db),BENCH_AUTH='Bearer '+tokens[0]['token'])
+token=tokens[0]['token']
+if long_claims:
+    def b64(x): return base64.urlsafe_b64encode(x).rstrip(b'=')
+    payload={'sub':'1','username':('"\\\n\t'*60),'exp':int(time.time())+3600}
+    msg=b64(b'{"alg":"HS256"}')+b'.'+b64(json.dumps(payload).encode())
+    token=(msg+b'.'+b64(hmac.new(b'twelve-dollar-challenge',msg,hashlib.sha256).digest())).decode()
+env=dict(os.environ,SQLITE_PATH=str(db),BENCH_AUTH='Bearer '+token)
 rows=[]
 def external():
     pids=[]

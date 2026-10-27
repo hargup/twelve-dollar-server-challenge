@@ -115,7 +115,7 @@ static u8 *arena_get(u32 n) {
   return p;
 }
 
-static inline int authenticate(const req_t *rq, job_t *j, int materialize_name) {
+static inline __attribute__((always_inline)) int authenticate(const req_t *rq, job_t *j, int materialize_name) {
   if (!rq->has_auth || rq->auth_len < 7 || memcmp(rq->auth, "Bearer ", 7)) { j->resp = ERR(@{ERR_NO_BEARER}); return 0; }
   claims_t c;
   int rc = jwt_verify(rq->auth + 7, rq->auth_len - 7, now_s, &c, materialize_name);
@@ -311,14 +311,15 @@ static void exec_read(job_t *j) {
     j->resp = out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1);
     return;
   case K_HEALTH:
-    out_begin(o, @{OBJECT_CLASS});
     rc = sqlite3_step(Q_health);
     sqlite3_reset(Q_health);
     if (rc == SQLITE_ROW) {
+      @{HEALTH_BEGIN}
       i64 uptime = now_s - started_at;
       @{HEALTH_BODY}
       j->resp = out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1);
     } else {
+      out_begin(o, @{OBJECT_CLASS});
       const u8 *msg = (const u8 *)sqlite3_errmsg(db);
       u32 msg_len = (u32)strlen((const char *)msg);
       @{DEGRADED_BODY}
@@ -344,7 +345,7 @@ static void exec_write(job_t *j) {
     if (rc != SQLITE_DONE) { j->resp = ERR(@{ERR_INTERNAL}); return; }
     int already = sqlite3_changes(db) != 1;
     i64 id = j->id;
-    out_begin(o, @{OBJECT_CLASS});
+    @{LIKE_BEGIN}
     @{LIKE_BODY}
     j->resp = already ? out_finish(o, @{HDR_OK}, sizeof @{HDR_OK} - 1) : out_finish(o, @{HDR_CREATED}, sizeof @{HDR_CREATED} - 1);
     return;
