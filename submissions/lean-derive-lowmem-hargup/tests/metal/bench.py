@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated benchmark harness; CPU/memory restrictions apply only to test processes."""
-import argparse, datetime, json, os, pathlib, resource, shutil, socket, sqlite3, subprocess, sys, time, threading, tempfile
+import argparse, datetime, json, os, pathlib, resource, re, shutil, socket, sqlite3, subprocess, sys, time, threading, tempfile
 ROOT = pathlib.Path('/root/twelve/opt-audit-1024/metal')
 CHALLENGE = pathlib.Path('/root/twelve/challenge')
 
@@ -106,13 +106,16 @@ def main():
                        '4', str(a.conns), str(a.duration), a.mix, token]
             samples = []
             interference = set()
+            client = None
             def check_interference():
                 for procpath in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
                     try:
                         argv = procpath.read_bytes().split(b'\0')
                     except (OSError, ProcessLookupError):
                         continue
-                    if argv[0] == b'/root/twelve/loadgen/loadgen' and str(out/'load.json').encode() not in argv:
+                    exe = argv[0].rsplit(b'/',1)[-1]
+                    own = (client is not None and procpath.parent.name == str(client.pid)) or str(out/'load.json').encode() in argv
+                    if exe in (b'loadgen',b'blast',b'cc1') and not own:
                         interference.add(str(procpath.parent.name))
             check_interference()
             if interference:
@@ -126,12 +129,14 @@ def main():
             sampler = threading.Thread(target=sample)
             sampler.start()
             try:
-                r = subprocess.run(cmd, stdout=(out/'client.out').open('w'), stderr=(out/'client.err').open('w'))
+                client = r = subprocess.Popen(cmd, stdout=(out/'client.out').open('w'), stderr=(out/'client.err').open('w'))
+                r.wait()
             finally:
                 done.set()
                 sampler.join()
             (out/'cpu-samples.json').write_text(json.dumps(samples))
             result['external_loadgen_pids'] = sorted(interference)
+            result['performance_valid'] = not interference
             result['exit_code'] = r.returncode
             result['cpu_usec'] = readstat(cg/'cpu.stat')['usage_usec']-u0
             if a.mode == 'load':
@@ -151,6 +156,10 @@ def main():
                               hold_p95_ms=hold['total_ms']['p95'], hold_p99_ms=hold['total_ms']['p99'])
             else:
                 result['output'] = (out/'client.out').read_text().strip()
+                counts = [int(x) for x in re.findall(r'(?:2xx|4xx|5xx|other) (\d+)', result['output'])]
+                result['requests'] = sum(counts)
+                result['errors'] = sum(counts[1:])
+                result['cpu_us_per_request'] = result['cpu_usec']/result['requests']
         result['memory_peak_bytes'] = int((cg/'memory.peak').read_text())
         result['memory'] = readstat(cg/'memory.stat')
         (out/'summary.json').write_text(json.dumps(result, indent=2)+'\n')

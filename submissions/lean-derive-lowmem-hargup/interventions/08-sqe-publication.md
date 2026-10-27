@@ -45,3 +45,18 @@ This is an explicit C/kernel trust boundary, not a Lean proof of kernel behavior
 queues, unsigned tail wrap, interrupt retries, partial consumption, field zeroing and
 close-pair capacity. Real small-queue API/pipeline tests and mixed network measurements
 are required before keeping Q1.
+
+### Q1 (`5a536b3`, control `9c2439f`)
+
+Mocked-boundary tests passed ASAN/UBSAN on Linux with 2/4/8 entries, tail wrap,
+EINTR retries, one-at-a-time submission consumption, full zeroing and shutdown/close
+capacity. Transport ownership tests also passed. All 42 API tests, SQL post/feed,
+edge/pipeline and claim checks passed under UID 65534.
+
+Twenty-second mixed HTTP ABBA: control 175,112 / 181,945 req/s; candidate
+176,987 / 174,808 req/s; every run zero errors. Raw directories timestamped
+1793083820821960831, 1793083852575660979, 1793083884308561263,
+1793083916068052564. This does **not** establish a throughput gain (candidate mean
+~1.5% lower with overlapping spread). The intended benefit is fewer shared-tail
+publications and complete construction before visibility; collect STATS publication
+counts plus real tiny-queue/high-connection checks before final disposition.
