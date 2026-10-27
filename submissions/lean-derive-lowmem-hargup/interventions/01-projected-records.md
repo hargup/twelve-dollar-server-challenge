@@ -1,6 +1,6 @@
 # Schema-projected SQLite record kernels
 
-Status: planned. Source baseline: `100234f`.
+Status: first lowering under test. Source baseline: `100234f`.
 
 ## Work to eliminate
 
@@ -21,3 +21,11 @@ Compare native reads against SQL for 20,000 seeded posts and feeds, plus long/ov
 ## Experiments
 
 No measurements yet. Each entry will record source SHA, control SHA, commands, fixture, raw result location, correctness result, performance result and keep/reject decision. Multiple interventions may share one coherent compiler change; attribute that experiment to all affected files.
+
+### Experiment P1: username projection
+
+The typed `usersName` reference supplies the ordinal. The lowering returns one checked
+column, skips trailing serial types, and avoids the three-element intermediate array.
+The generated ordinal remains static; untrusted lengths and serial types remain checked.
+Control executable: `93ab6eb` (same C as typed foundation `1bf9f9b`). Candidate SHA and
+measurements will be added after the build. Lean clean build passed all 20 targets.

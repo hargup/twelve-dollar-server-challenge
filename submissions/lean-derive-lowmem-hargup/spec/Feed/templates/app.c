@@ -177,10 +177,10 @@ static int decode_create(const req_t *rq, job_t *j) {
 static int user_name(i64 uid, const u8 **author, u32 *author_len) {
   int rc = cur_seek(&C_users, uid);
   if (rc) return rc;
-  rec_t r; col_t c[@{USERS_NCOLS}];
-  if (cur_record(&C_users, &r) || rec_cols(&r, @{USERS_NCOLS}, c) || !(@{USERS_NAME_CHECK})) return -1;
-  *author = @{USERS_NAME}.p;
-  *author_len = col_len(&@{USERS_NAME});
+  rec_t r; col_t name;
+  if (cur_record(&C_users, &r) || rec_field(&r, @{USERS_NAME_ORDINAL}, &name) || !col_is_text(&name)) return -1;
+  *author = name.p;
+  *author_len = col_len(&name);
   return 0;
 }
 /* Feed.Db.rangeCounts: like counts for post ids lo..hi from one scan of likes_post_id_idx */

@@ -266,10 +266,10 @@ static inline void put_post(out_t *o, i64 id, const u8 *body, u32 body_len, cons
 static int user_name(i64 uid, const u8 **author, u32 *author_len) {
   int rc = cur_seek(&C_users, uid);
   if (rc) return rc;
-  rec_t r; col_t c[3];
-  if (cur_record(&C_users, &r) || rec_cols(&r, 3, c) || !(col_is_text(&c[1]))) return -1;
-  *author = c[1].p;
-  *author_len = col_len(&c[1]);
+  rec_t r; col_t name;
+  if (cur_record(&C_users, &r) || rec_field(&r, 1, &name) || !col_is_text(&name)) return -1;
+  *author = name.p;
+  *author_len = col_len(&name);
   return 0;
 }
 /* Feed.Db.rangeCounts: like counts for post ids lo..hi from one scan of likes_post_id_idx */

@@ -274,6 +274,26 @@ static inline int rec_cols(const rec_t *r, int ncol, col_t *c) {
   }
   return body <= end ? 0 : -1;
 }
+/* Project one field without constructing a column array or reading trailing serial types.
+ * The generated ordinal is schema-indexed; serial types/lengths remain checked here. */
+static inline int rec_field(const rec_t *r, u32 ordinal, col_t *c) {
+  const u8 *end = r->p + r->n;
+  u64 hsz;
+  const u8 *h = rd_varint(r->p, end, &hsz);
+  if (!h || hsz > r->n || hsz < (u64)(h - r->p)) return -1;
+  const u8 *hend = r->p + hsz;
+  u64 off = hsz;
+  for (u32 i = 0; i <= ordinal; i++) {
+    u64 t;
+    h = rd_varint(h, hend, &t);
+    if (!h || t > 2ull * UINT32_MAX + 13ull) return -1;
+    u32 len = serial_len(t);
+    if (off > r->n || len > r->n - off) return -1;
+    if (i == ordinal) { c->t = t; c->p = r->p + off; return 0; }
+    off += len;
+  }
+  return -1;
+}
 static inline int col_is_int(const col_t *c) { return (c->t >= 1 && c->t <= 6) || c->t == 8 || c->t == 9; }
 static inline int col_is_text(const col_t *c) { return c->t >= 13 && (c->t & 1); }
 static inline u32 col_len(const col_t *c) { return serial_len(c->t); }

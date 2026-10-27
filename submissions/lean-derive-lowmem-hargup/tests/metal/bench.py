@@ -59,6 +59,7 @@ def main():
             raise RuntimeError('startup timeout')
         result['startup_s'] = time.monotonic()-t
         if a.mode == 'check':
+            subprocess.run(['python3', str(ROOT/'source/tests/metal/oracle.py'), str(CHALLENGE/'seed/feed.db')], check=True)
             r = subprocess.run(['bash', str(CHALLENGE/'test/test.sh'), 'http://127.0.0.1:3000'],
                                stdout=(out/'correctness.log').open('w'), stderr=subprocess.STDOUT)
             print((out/'correctness.log').read_text().splitlines()[-1], flush=True)

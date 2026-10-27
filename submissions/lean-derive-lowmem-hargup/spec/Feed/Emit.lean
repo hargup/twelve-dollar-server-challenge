@@ -238,7 +238,7 @@ def appGen : String :=
     ("WINDOW_SPAN", toString (feedSize - 1)),
     ("MAX_BODY_CHARS", toString maxBodyChars),
     ("POSTS_NCOLS", toString (recordNeeds posts)),
-    ("USERS_NCOLS", toString (recordNeeds users)),
+    ("USERS_NAME_ORDINAL", toString usersName.index.val),
     ("POSTS_USER", col postsUser),
     ("POSTS_BODY", col postsBody),
     ("POSTS_CREATED", col postsCreated),
