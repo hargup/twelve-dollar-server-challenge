@@ -12,6 +12,25 @@ int main(void) {
     assert(x.p-x.start==y.p-y.start && !memcmp(x.start,y.start,x.p-x.start));
     out_abort(&x);out_abort(&y);
   }
+  /* Vector escaping (whichever width this build selects) against a byte-at-a-time reference,
+   * with escapes at every position relative to the 16- and 32-byte blocks. */
+  static const u8 alphabet[]={'a','"','\\','\n','\t',0x01,0x1f,0x20,0x7f,0xc3,0xa9,'/'};
+  unsigned seed=1;
+  for(int k=0;k<200000;k++){
+    u8 s[200],want[1300];u32 n=(u32)(k%200),w=0;
+    for(u32 i=0;i<n;i++){seed=seed*1103515245u+12345u;s[i]=(seed>>16)%5?'x':alphabet[(seed>>8)%sizeof alphabet];}
+    want[w++]='"';
+    for(u32 i=0;i<n;i++){
+      u8 c=s[i];
+      if(c=='"'||c=='\\'){want[w++]='\\';want[w++]=c;}
+      else if(c<0x20){w+=(u32)sprintf((char*)want+w,c=='\n'?"\\n":c=='\t'?"\\t":"\\u%04x",c);}
+      else want[w++]=c;
+    }
+    want[w++]='"';
+    out_t o;out_begin(&o,OUT_SMALL);out_need(&o,JSTR_ROOM(n));out_jstr(&o,s,n);
+    assert((u32)(o.p-o.start)==w&&!memcmp(o.start,want,w));
+    out_abort(&o);
+  }
   const i64 values[]={LLONG_MIN,LLONG_MIN+1,-1,0,1,LLONG_MAX};
   for(int k=0;k<1000;k++)for(unsigned i=0;i<sizeof values/sizeof *values;i++) {
     out_t o;out_begin_inline(&o);out_i64(&o,values[i]);
@@ -27,5 +46,5 @@ int main(void) {
     assert(o.b->cap!=OUT_INLINE&&!memcmp(o.start,"prefix",6));
     memset(o.p,'x',20000);o.p+=20000;out_abort(&o);
   }
-  puts("output: signed extrema, inline reuse, partial sends, promotion and abort passed");
+  puts("output: vector escaping, signed extrema, inline reuse, partial sends, promotion and abort passed");
 }

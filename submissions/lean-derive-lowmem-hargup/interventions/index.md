@@ -21,6 +21,7 @@ not a claimed speedup. Design the shared type system before optimizing individua
 | 6 | [Refined text](06-refined-text.md) | Preserve parser facts through output | T1 retained; timestamp invariant not adopted |
 | 7 | [Incremental framing](07-incremental-framing.md) | Avoid repeated header work on fragments | H1 retained: ~19x targeted parsing improvement |
 | 8 | [SQE publication](08-sqe-publication.md) | Publish fully constructed entries by batch | Q1 retained: ~99.2% fewer tail publications |
+| 9 | [Ideas from PR #158](09-pr158-ideas.md) | General techniques from another entry, profiled first | W1 WAL write buffer (−87% `pwrite`) and A1 AVX2 escaping (−2.5% feed CPU) retained; page-cache reads and larger checkpoints rejected |
 
 ## Experiment discipline
 

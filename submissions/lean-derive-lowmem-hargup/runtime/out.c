@@ -123,6 +123,18 @@ static inline void out_jstr(out_t *o, const u8 *s, u32 n) {
   *d++ = '"';
   u32 i = 0;
   for (;;) {
+#if defined(__AVX2__) && !defined(OUT_NO_AVX2)
+    const __m256i q2 = _mm256_set1_epi8('"'), bs2 = _mm256_set1_epi8('\\'), lim2 = _mm256_set1_epi8(0x1f);
+    while (i + 32 <= n) {
+      __m256i v = _mm256_loadu_si256((const __m256i *)(s + i));
+      __m256i bad = _mm256_or_si256(_mm256_or_si256(_mm256_cmpeq_epi8(v, q2), _mm256_cmpeq_epi8(v, bs2)),
+                                    _mm256_cmpeq_epi8(_mm256_min_epu8(v, lim2), v));
+      _mm256_storeu_si256((__m256i *)d, v);
+      u32 m = (u32)_mm256_movemask_epi8(bad);
+      if (m) { u32 k = (u32)__builtin_ctz(m); d += k; i += k; goto escape; }
+      d += 32; i += 32;
+    }
+#endif
 #if defined(__x86_64__)
     const __m128i q = _mm_set1_epi8('"'), bs = _mm_set1_epi8('\\'), lim = _mm_set1_epi8(0x1f);
     while (i + 16 <= n) {

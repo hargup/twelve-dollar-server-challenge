@@ -32,6 +32,12 @@ optimization experiments and decisions are in [interventions/index.md](intervent
 * **Checkpoints off the request path.** WAL checkpoints (copying the log into the database and
   fsyncing it) run on their own thread and SQLite connection, so a slow disk can no longer stall
   responses. See SQLite below.
+* **Buffered WAL writes.** SQLite writes each WAL frame as two `pwrite`s. The request
+  connection's WAL goes through a small VFS that writes a commit's frames together, before
+  SQLite publishes them: 87% fewer `pwrite` calls, and the same bytes in the same order. Kill -9
+  tests confirm every acknowledged write survives. See SQLite below.
+* **AVX2 JSON escaping.** String escaping scans 32 bytes per step when the CPU has AVX2: 2.5%
+  less application CPU per feed.
 
 The kernel's memory per open connection is the same for both variants, and so is most of the
 total: on the server side, about 2.4 KB for the TCP socket, 1.3 KB for its inode, file and dentry,
@@ -147,6 +153,12 @@ results): feed 16.7 µs with the reference SQL → 5.4 µs.
     its own connection.
   * A commit's durability does not depend on checkpoints (WAL, `synchronous=NORMAL`). Every
     response still waits for its commit.
+  * The request connection opens its WAL through a buffering VFS (`runtime/db.c`). Writes that
+    continue the previous one are held and written, in pieces under 128 KiB, when the commit
+    frame's page arrives. That happens inside SQLite's own write call, before the frames are
+    published to the checkpoint thread, so a failed write fails the commit. Every other access
+    to the WAL flushes first, and out-of-place writes go straight through. Database files and
+    the checkpoint connection use the stock unix VFS.
   * The log starts over only when a write begins after every frame has been checkpointed. If
     it still grows past 64 MB, the request thread checkpoints the remainder between batches.
     That is one fsync stall, so it is a last resort; in the measured runs it never ran.
@@ -186,6 +198,10 @@ limit.
   reads, long strings, JSON escaping, and UTF-8. Reads `HOST`, `PORT`, and `JWT_SECRET`; it
   creates test posts, so use a disposable database copy.
 * Native plans vs SQL: the feed and 20,000 random posts are byte-identical on the seed.
+* `python3 tests/crash_durability.py <server> <seed.db> [rounds]`: pipelined writes, then
+  kill -9 at a random moment. Every acknowledged post and like must be in the recovered
+  database, and `integrity_check` must pass. Built with `-DDB_CACHE_KIB=64`, batches spill pages
+  and rewrite WAL frames before they commit.
 * Load: a native load generator reproducing `bench/load.js` (user model, think times, mix,
   `ramping-vus`, one keep-alive connection per user). It is not part of this submission.
 
